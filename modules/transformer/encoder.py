@@ -32,7 +32,7 @@ class EncoderConfig(TypedDict):
 class Encoder(nn.Module):
     """Transformer encoder module."""
 
-    def __init__(self, config: EncoderConfig, embedding_layer: Tuple[nn.Module]):
+    def __init__(self, config: EncoderConfig, embedding_layer: Tuple[Union[nn.Module, nn.Embedding], ...]):
         """Construct an Encoder object."""
         super(Encoder, self).__init__()
         attention_dim = config["hidden"]
