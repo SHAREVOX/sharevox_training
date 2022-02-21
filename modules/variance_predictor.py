@@ -3,22 +3,13 @@ from torch import nn, Tensor
 from typing import TypedDict, Optional
 from torchtyping import TensorType
 
+from modules.transformer.layer_norm import LayerNorm
+
 
 class VariancePredictorConfig(TypedDict):
     filter_size: int
     kernel_size: int
     dropout: float
-
-
-class LayerNorm(nn.Module):
-    def __init__(self, nout: int):
-        super(LayerNorm, self).__init__()
-        self.layer_norm = nn.LayerNorm(nout, eps=1e-12)
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.layer_norm(x.transpose(1, -1))
-        x = x.transpose(1, -1)
-        return x
 
 
 class VariancePredictor(nn.Module):
