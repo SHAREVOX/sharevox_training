@@ -9,10 +9,11 @@
 import torch
 
 from torch import nn, Tensor
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from modules.transformer.attention import MultiHeadedAttention
 from modules.transformer.layer_norm import LayerNorm
+from modules.transformer.multi_layer_conv import Conv1dLinear, MultiLayeredConv1d
 from modules.transformer.positionwise_feed_forward import PositionwiseFeedForward
 
 
@@ -42,7 +43,7 @@ class EncoderLayer(nn.Module):
         self,
         size: int,
         self_attn: MultiHeadedAttention,
-        feed_forward: PositionwiseFeedForward,
+        feed_forward: Union[PositionwiseFeedForward, Conv1dLinear, MultiLayeredConv1d],
         dropout_rate: float,
         normalize_before: bool = True,
         concat_after: bool = False,
