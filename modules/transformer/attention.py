@@ -7,13 +7,99 @@
 """Multi-Head Attention layer definition."""
 
 import math
-from typing import Optional
+from typing import Optional, Tuple
 import numpy as np
 import torch
 from torch import nn, Tensor
 
 
-class RelPositionMultiHeadedAttention(nn.Module):
+class MultiHeadedAttention(nn.Module):
+    """Multi-Head Attention layer.
+    Args:
+        n_head (int): The number of heads.
+        n_feat (int): The number of features.
+        dropout_rate (float): Dropout rate.
+    """
+
+    def __init__(self, n_head: int, n_feat: int, dropout_rate: float):
+        """Construct an MultiHeadedAttention object."""
+        super(MultiHeadedAttention, self).__init__()
+        assert n_feat % n_head == 0
+        # We assume d_v always equals d_k
+        self.d_k = n_feat // n_head
+        self.h = n_head
+        self.linear_q = nn.Linear(n_feat, n_feat)
+        self.linear_k = nn.Linear(n_feat, n_feat)
+        self.linear_v = nn.Linear(n_feat, n_feat)
+        self.linear_out = nn.Linear(n_feat, n_feat)
+        self.dropout = nn.Dropout(p=dropout_rate)
+
+    def forward_qkv(self, query: Tensor, key: Tensor, value: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+        """Transform query, key and value.
+        Args:
+            query (torch.Tensor): Query tensor (#batch, time1, size).
+            key (torch.Tensor): Key tensor (#batch, time2, size).
+            value (torch.Tensor): Value tensor (#batch, time2, size).
+        Returns:
+            torch.Tensor: Transformed query tensor (#batch, n_head, time1, d_k).
+            torch.Tensor: Transformed key tensor (#batch, n_head, time2, d_k).
+            torch.Tensor: Transformed value tensor (#batch, n_head, time2, d_k).
+        """
+        n_batch = query.size(0)
+        q = self.linear_q(query).view(n_batch, -1, self.h, self.d_k)
+        k = self.linear_k(key).view(n_batch, -1, self.h, self.d_k)
+        v = self.linear_v(value).view(n_batch, -1, self.h, self.d_k)
+        q = q.transpose(1, 2)  # (batch, head, time1, d_k)
+        k = k.transpose(1, 2)  # (batch, head, time2, d_k)
+        v = v.transpose(1, 2)  # (batch, head, time2, d_k)
+
+        return q, k, v
+
+    def forward_attention(self, value: Tensor, scores: Tensor, mask: Tensor) -> Tensor:
+        """Compute attention context vector.
+        Args:
+            value (Tensor): Transformed value (#batch, n_head, time2, d_k).
+            scores (Tensor): Attention score (#batch, n_head, time1, time2).
+            mask (Tensor): Mask (#batch, 1, time2) or (#batch, time1, time2).
+        Returns:
+            Tensor: Transformed value (#batch, time1, d_model)
+                weighted by the attention score (#batch, time1, time2).
+        """
+        n_batch = value.size(0)
+        if mask is not None:
+            mask = mask.unsqueeze(1).eq(0)  # (batch, 1, *, time2)
+            # min_value: float = float(numpy.finfo(torch.tensor(0, dtype=scores.dtype).numpy().dtype).min)
+            mask = mask.to(device=scores.device)
+            scores = scores.masked_fill_(mask, -np.inf)
+            attn = torch.softmax(scores, dim=-1).masked_fill(mask, 0.0)  # (batch, head, time1, time2)
+        else:
+            attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
+
+        p_attn = self.dropout(attn)
+        x = torch.matmul(p_attn, value)  # (batch, head, time1, d_k)
+        x = (
+            x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)
+        )  # (batch, time1, d_model)
+
+        return self.linear_out(x)  # (batch, time1, d_model)
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, mask: Optional[Tensor]) -> Tensor:
+        """Compute scaled dot product attention.
+        Args:
+            query (Tensor): Query tensor (#batch, time1, size).
+            key (Tensor): Key tensor (#batch, time2, size).
+            value (Tensor): Value tensor (#batch, time2, size).
+            mask (Tensor): Mask tensor (#batch, 1, time2) or
+                (#batch, time1, time2).
+        Returns:
+            Tensor: Output tensor (#batch, time1, d_model).
+        """
+        q, k, v = self.forward_qkv(query, key, value)
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+        return self.forward_attention(v, scores, mask)
+
+
+class RelPositionMultiHeadedAttention(MultiHeadedAttention):
     """Multi-Head Attention layer with relative position encoding (new implementation).
     Details can be found in https://github.com/espnet/espnet/pull/2816.
     Paper: https://arxiv.org/abs/1901.02860
@@ -26,17 +112,7 @@ class RelPositionMultiHeadedAttention(nn.Module):
 
     def __init__(self, n_head: int, n_feat: int, dropout_rate: int, zero_triu: bool = False):
         """Construct an RelPositionMultiHeadedAttention object."""
-        super(RelPositionMultiHeadedAttention, self).__init__()
-        assert n_feat % n_head == 0
-        # We assume d_v always equals d_k
-        self.d_k = n_feat // n_head
-        self.h = n_head
-        self.linear_q = nn.Linear(n_feat, n_feat)
-        self.linear_k = nn.Linear(n_feat, n_feat)
-        self.linear_v = nn.Linear(n_feat, n_feat)
-        self.linear_out = nn.Linear(n_feat, n_feat)
-        self.dropout = nn.Dropout(p=dropout_rate)
-
+        super().__init__(n_head, n_feat, dropout_rate)
         self.zero_triu = zero_triu
         # linear transformation for positional encoding
         self.linear_pos = nn.Linear(n_feat, n_feat, bias=False)
@@ -80,12 +156,8 @@ class RelPositionMultiHeadedAttention(nn.Module):
         Returns:
             Tensor: Output tensor (#batch, time1, d_model).
         """
-        n_batch = query.size(0)
-        q = self.linear_q(query).view(n_batch, -1, self.h, self.d_k)  # (batch, head, time1, d_k)
-        k = self.linear_k(key).view(n_batch, -1, self.h, self.d_k)
-        v = self.linear_v(value).view(n_batch, -1, self.h, self.d_k)
-        k = k.transpose(1, 2)  # (batch, head, time2, d_k)
-        v = v.transpose(1, 2)  # (batch, head, time2, d_k)
+        q, k, v = self.forward_qkv(query, key, value)
+        q = q.transpose(1, 2)  # (batch, time1, head, d_k)
 
         n_batch_pos = pos_emb.size(0)
         p = self.linear_pos(pos_emb).view(n_batch_pos, -1, self.h, self.d_k)
@@ -111,18 +183,4 @@ class RelPositionMultiHeadedAttention(nn.Module):
             self.d_k
         )  # (batch, head, time1, time2)
 
-        if mask is not None:
-            mask = mask.unsqueeze(1).eq(0)  # (batch, 1, time1, time2)
-            # min_value: float = float(numpy.finfo(torch.tensor(0, dtype=scores.dtype).numpy().dtype).min)
-            mask = mask.to(device=scores.device)
-            scores = scores.masked_fill_(mask, -np.inf)
-            attn = torch.softmax(scores, dim=-1).masked_fill(mask, 0.0)  # (batch, head, time1, time2)
-        else:
-            attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
-
-        p_attn = self.dropout(attn)
-        x = torch.matmul(p_attn, v)  # (batch, head, time1, d_k)
-        x = (
-            x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)
-        )  # (batch, time1, d_model)
-        return self.linear_out(x)  # (batch, time1, d_model)
+        return self.forward_attention(v, scores, mask)
