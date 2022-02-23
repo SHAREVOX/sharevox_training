@@ -32,7 +32,7 @@ class EncoderConfig(TypedDict):
 class Encoder(nn.Module):
     """Transformer encoder module."""
 
-    def __init__(self, config: EncoderConfig, embedding_layer: Tuple[Union[nn.Module, nn.Embedding], ...]):
+    def __init__(self, config: EncoderConfig):
         """Construct an Encoder object."""
         super(Encoder, self).__init__()
         attention_dim = config["hidden"]
@@ -49,8 +49,7 @@ class Encoder(nn.Module):
         positionwise_conv_kernel_size = config["kernel_size"]
 
         self.embed = nn.Sequential(
-            *embedding_layer,
-            pos_enc_class(attention_dim, positional_dropout_rate),
+            pos_enc_class(attention_dim, positional_dropout_rate)
         )
         self.normalize_before = normalize_before
         positionwise_layer, positionwise_layer_args = self.get_positionwise_layer(
