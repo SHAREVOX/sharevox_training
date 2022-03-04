@@ -96,7 +96,7 @@ class MelSpectrogramDecoder(nn.Module):
         kernel_size = model_config["variance_embedding"]["kernel_size"]
         dropout = model_config["variance_embedding"]["dropout"]
 
-        self.length_regulator = LengthRegulator();
+        self.length_regulator = LengthRegulator()
         padding_idx = 0
         hidden = model_config["encoder"]["hidden"]
         self.phoneme_embedding = nn.Embedding(
