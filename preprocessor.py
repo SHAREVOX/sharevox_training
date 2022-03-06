@@ -21,7 +21,6 @@ from typing import Tuple, List, TypedDict
 
 class PreProcessPath(TypedDict):
     corpus_path: str
-    lexicon_path: str
     raw_path: str
     preprocessed_path: str
 
@@ -44,7 +43,6 @@ class PreProcessMel(TypedDict):
 
 
 class PreProcessConfig(TypedDict):
-    dataset: str
     path: PreProcessPath
     val_size: int
     audio: PreProcessAudio
