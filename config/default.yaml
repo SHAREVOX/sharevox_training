@@ -1,0 +1,66 @@
+preprocess:
+  path:
+    corpus_path: "../jsut_ver1.1/basic5000"
+    raw_path: "./raw_data/JSUT"
+    preprocessed_path: "./preprocessed_data/JSUT"
+  val_size: 100
+  audio:
+    sampling_rate: 48000
+    max_wav_value: 32768.0
+  stft:
+    filter_length: 1024
+    hop_length: 256
+    win_length: 1024
+  mel:
+    n_mel_channels: 80
+    mel_fmin: 0
+    mel_fmax: 8000
+
+model:
+  encoder:
+    hidden: 256
+    heads: 2
+    layers: 4
+    dropout_rate: 0.2
+    normalize_before: True
+    concat_after: True
+    layer_type: "conv1d"
+    kernel_size: 9
+  decoder:
+    hidden: 256
+    heads: 2
+    layers: 6
+    dropout_rate: 0.2
+    normalize_before: True
+    concat_after: True
+    layer_type: "conv1d"
+    kernel_size: 9
+  variance_predictor:
+    filter_size: 256
+    kernel_size: 3
+    dropout: 0.5
+  variance_embedding:
+    kernel_size: 3
+    dropout: 0.1
+
+train:
+  path:
+    ckpt_path: "./output/ckpt/JSUT"
+    log_path: "./output/log/JSUT"
+    result_path: "./output/result/JSUT"
+  optimizer:
+    batch_size: 16
+    betas: [ 0.9, 0.98 ]
+    eps: 0.000000001
+    weight_decay: 0.0
+    grad_clip_thresh: 1.0
+    grad_acc_step: 1
+    warm_up_step: 4000
+    anneal_steps: [ ]
+    anneal_rate: 1.0
+  step:
+    total_step: 500000
+    log_step: 100
+    synth_step: 1000
+    val_step: 1000
+    save_step: 10000
