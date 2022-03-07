@@ -81,7 +81,6 @@ class Dataset(TorchDataset):
         sort: bool = False,
         drop_last: bool = False
     ):
-        self.dataset_name = preprocess_config["dataset"]
         self.preprocessed_path = preprocess_config["path"]["preprocessed_path"]
         self.batch_size = train_config["optimizer"]["batch_size"]
 
