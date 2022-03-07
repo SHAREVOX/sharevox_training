@@ -70,3 +70,9 @@ def get_model(
     variance_model.requires_grad_ = False
     decoder_model.requires_grad_ = False
     return variance_model, decoder_model, None
+
+
+def get_param_num(model: nn.DataParallel) -> int:
+    num_param = sum(param.numel() for param in model.parameters())
+    return num_param
+
