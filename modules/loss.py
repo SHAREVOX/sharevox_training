@@ -24,7 +24,7 @@ class FastSpeech2Loss(nn.Module):
         self,
         outputs: Tensor,
         postnet_outputs: Tensor,
-        duration_outputs: Tensor,
+        log_duration_outputs: Tensor,
         pitch_outputs: Tensor,
         mel_targets: Tensor,
         duration_targets: LongTensor,
@@ -37,7 +37,7 @@ class FastSpeech2Loss(nn.Module):
         Args:
             outputs (Tensor): Batch of outputs (B, T_feats, odim).
             postnet_outputs (Tensor): Batch of outputs after postnet (B, T_feats, odim).
-            duration_outputs (Tensor): Batch of outputs of duration predictor (B, T_text).
+            log_duration_outputs (Tensor): Batch of outputs of duration predictor (B, T_text).
             pitch_outputs (Tensor): Batch of outputs of pitch predictor (B, T_text, 1).
             mel_targets (Tensor): Batch of target mel-spectrogram (B, T_feats, odim).
             duration_targets (LongTensor): Batch of durations (B, T_text).
@@ -59,7 +59,7 @@ class FastSpeech2Loss(nn.Module):
         postnet_outputs = postnet_outputs.masked_select(output_masks)
         mel_targets = mel_targets.masked_select(output_masks)
         duration_masks = make_non_pad_mask(input_lens).to(mel_targets.device)
-        duration_outputs = duration_outputs.masked_select(duration_masks)
+        log_duration_outputs = log_duration_outputs.masked_select(duration_masks)
         log_duration_targets = torch.log(duration_targets.float() + 1.0)
         log_duration_targets = log_duration_targets.masked_select(duration_masks)
         pitch_masks = make_non_pad_mask(input_lens).unsqueeze(-1).to(mel_targets.device)
@@ -69,7 +69,7 @@ class FastSpeech2Loss(nn.Module):
         # calculate loss
         mel_loss = self.l1_criterion(outputs, mel_targets)
         postnet_mel_loss = self.l1_criterion(postnet_outputs, mel_targets)
-        duration_loss = self.mse_criterion(duration_outputs, log_duration_targets)
+        duration_loss = self.mse_criterion(log_duration_outputs, log_duration_targets)
         pitch_loss = self.mse_criterion(pitch_outputs, pitch_targets)
 
         total_loss = mel_loss + postnet_mel_loss + duration_loss + pitch_loss
