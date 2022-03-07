@@ -24,7 +24,7 @@ class FastSpeech2Loss(nn.Module):
         self,
         outputs: Tensor,
         postnet_outputs: Tensor,
-        duration_outputs: LongTensor,
+        duration_outputs: Tensor,
         pitch_outputs: Tensor,
         mel_targets: Tensor,
         duration_targets: LongTensor,
@@ -37,7 +37,7 @@ class FastSpeech2Loss(nn.Module):
         Args:
             outputs (Tensor): Batch of outputs (B, T_feats, odim).
             postnet_outputs (Tensor): Batch of outputs after postnet (B, T_feats, odim).
-            duration_outputs (LongTensor): Batch of outputs of duration predictor (B, T_text).
+            duration_outputs (Tensor): Batch of outputs of duration predictor (B, T_text).
             pitch_outputs (Tensor): Batch of outputs of pitch predictor (B, T_text, 1).
             mel_targets (Tensor): Batch of target mel-spectrogram (B, T_feats, odim).
             duration_targets (LongTensor): Batch of durations (B, T_text).
