@@ -132,7 +132,7 @@ class MelSpectrogramDecoder(nn.Module):
         phoneme_lens: LongTensor,
         max_phoneme_len: LongTensor,
         pitches: Tensor,
-        durations: Tensor,
+        durations: LongTensor,
         mel_lens: Optional[LongTensor],
     ):
         """Mel-spectrogram Decoder's forward
@@ -142,7 +142,7 @@ class MelSpectrogramDecoder(nn.Module):
             phoneme_lens (LongTensor): Phoneme Sequence Lengths
             max_phoneme_len (LongTensor): Max Phoneme Sequence Length
             pitches (Tensor): Pitch Sequences
-            durations (Tensor): Duration Sequences
+            durations (LongTensor): Duration Sequences
             mel_lens (Optional[LongTensor]): Mel-spectrogram Lengths
 
         Returns:
