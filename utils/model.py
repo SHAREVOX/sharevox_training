@@ -16,7 +16,7 @@ class Config(TypedDict):
 
 
 @overload
-def get_vv_model(
+def get_model(
     restore_step: int,
     config: Config,
     device: torch.device,
@@ -27,7 +27,7 @@ def get_vv_model(
 
 
 @overload
-def get_vv_model(
+def get_model(
     restore_step: int,
     config: Config,
     device: torch.device,
@@ -37,7 +37,7 @@ def get_vv_model(
     pass
 
 
-def get_vv_model(
+def get_model(
     restore_step: int,
     config: Config,
     device: torch.device,
