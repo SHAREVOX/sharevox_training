@@ -2,7 +2,9 @@ import os
 from typing import Optional, Union, Tuple, TypedDict, overload
 
 import torch
+from torch import nn, device as TorchDevice
 
+import fregan
 from dataset import TrainConfig
 from modules.fastspeech2 import PitchAndDurationPredictor, MelSpectrogramDecoder, ModelConfig
 from modules.optimizer import ScheduledOptim
@@ -76,3 +78,13 @@ def get_param_num(model: nn.DataParallel) -> int:
     num_param = sum(param.numel() for param in model.parameters())
     return num_param
 
+
+def get_vocoder(device: TorchDevice):
+    config = fregan.Config()
+    vocoder = fregan.Generator(config)
+    ckpt = torch.load(f"fregan/generator_universal.pth.tar", map_location=device)
+    vocoder.load_state_dict(ckpt["generator"])
+    vocoder.eval()
+    vocoder.remove_weight_norm()
+    vocoder.to(device)
+    return vocoder
