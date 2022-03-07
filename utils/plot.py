@@ -5,7 +5,7 @@ import numpy as np
 
 
 def plot_mel(
-    data: List[Tuple[np.ndarray, np.ndarray, np.ndarray]], titles: List[str]
+    data: List[Tuple[np.ndarray, np.ndarray]], titles: List[str]
 ) -> plt.Figure:
     plot_data: Tuple[plt.Figure, plt.Axes] = plt.subplots(len(data), 1, squeeze=False)
     fig, axes = plot_data
@@ -18,7 +18,7 @@ def plot_mel(
         return ax
 
     for i in range(len(data)):
-        mel, pitch, energy = data[i]
+        mel, pitch = data[i]
         axes[i][0].imshow(mel, origin="lower")
         axes[i][0].set_aspect(2.5, adjustable="box")
         axes[i][0].set_ylim(0, mel.shape[0])
