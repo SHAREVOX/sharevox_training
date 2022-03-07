@@ -51,7 +51,6 @@ class DatasetItem(TypedDict):
     accent: np.ndarray
     mel: np.ndarray
     pitch: np.ndarray
-    energy: np.ndarray
     duration: np.ndarray
 
 
@@ -66,7 +65,6 @@ ReProcessedItem = Tuple[
     np.ndarray,
     np.ndarray,
     np.int64,
-    np.ndarray,
     np.ndarray,
     np.ndarray
 ]
@@ -119,12 +117,6 @@ class Dataset(TorchDataset):
             "{}-pitch-{}.npy".format(speaker, basename),
         )
         pitch = np.load(pitch_path)
-        energy_path = os.path.join(
-            self.preprocessed_path,
-            "energy",
-            "{}-energy-{}.npy".format(speaker, basename),
-        )
-        energy = np.load(energy_path)
         duration_path = os.path.join(
             self.preprocessed_path,
             "duration",
@@ -140,7 +132,6 @@ class Dataset(TorchDataset):
             accent=accent,
             mel=mel,
             pitch=pitch,
-            energy=energy,
             duration=duration
         )
 
@@ -172,7 +163,6 @@ class Dataset(TorchDataset):
         accents = [data[idx]["accent"] for idx in idxs]
         mels = [data[idx]["mel"] for idx in idxs]
         pitches = [data[idx]["pitch"] for idx in idxs]
-        energies = [data[idx]["energy"] for idx in idxs]
         durations = [data[idx]["duration"] for idx in idxs]
 
         text_lens = np.array([text.shape[0] for text in texts])
@@ -183,7 +173,6 @@ class Dataset(TorchDataset):
         accents = pad_1D(accents)
         mels = pad_2D(mels)
         pitches = pad_1D(pitches)
-        energies = pad_1D(energies)
         durations = pad_1D(durations)
 
         max_text_len: np.int64 = max(text_lens)
@@ -201,7 +190,6 @@ class Dataset(TorchDataset):
             mel_lens,
             max_mel_len,
             pitches,
-            energies,
             durations,
         )
 
