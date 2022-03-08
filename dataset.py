@@ -69,6 +69,16 @@ ReProcessedItem = Tuple[
     np.ndarray
 ]
 
+ReProcessedTextItem = Tuple[
+    List[str],
+    List[str],
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.int64,
+    np.ndarray
+]
+
 
 class Dataset(TorchDataset):
     def __init__(
