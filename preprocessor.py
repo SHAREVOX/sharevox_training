@@ -98,7 +98,8 @@ class Preprocessor:
                     else:
                         info, pitch, n = ret
                     out.append(info)
-
+                else:
+                    raise Exception("TextGrid not found")
                 n_frames += n
 
             # accent
