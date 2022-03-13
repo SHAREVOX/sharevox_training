@@ -82,9 +82,10 @@ class Preprocessor:
 
         # Compute pitch, energy, duration, and mel-spectrogram
         speakers = {}
-        for i, speaker in enumerate(tqdm(os.listdir(self.in_dir), desc="Dir", position=0)):
+        dirs = list(filter(lambda x: os.path.isdir(os.path.join(self.in_dir, x)), os.listdir(self.in_dir)))
+        for i, speaker in enumerate(tqdm(dirs, desc="Dir", position=0)):
             speakers[speaker] = i
-            wavs = list(filter(lambda p: ".wav" not in p, os.listdir(os.path.join(self.in_dir, speaker))))
+            wavs = list(filter(lambda p: ".wav" in p, os.listdir(os.path.join(self.in_dir, speaker))))
             for wav_name in tqdm(wavs, desc="File", position=1):
                 basename = wav_name.split(".")[0]
                 tg_path = os.path.join(
@@ -111,7 +112,7 @@ class Preprocessor:
                 basename = basenames[j]
                 accent_seq = np.array([accent_to_id[a] for a in accent.split(" ")])
                 accent_filename = f"{basename}.npy"
-                np.save(os.path.join("accent", accent_filename), accent_seq)
+                np.save(os.path.join(self.out_dir, "accent", accent_filename), accent_seq)
 
         # Save files
         with open(os.path.join(self.out_dir, "speakers.json"), "w") as f:
@@ -251,5 +252,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     config = yaml.load(open(args.config, "r"), Loader=yaml.FullLoader)
-    preprocessor = Preprocessor(config)
+    preprocessor = Preprocessor(config["preprocess"])
     preprocessor.build_from_path()
