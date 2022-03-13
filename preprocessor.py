@@ -20,8 +20,7 @@ from typing import Tuple, List, TypedDict
 
 
 class PreProcessPath(TypedDict):
-    corpus_path: str
-    raw_path: str
+    data_path: str
     preprocessed_path: str
 
 
@@ -53,7 +52,7 @@ class PreProcessConfig(TypedDict):
 class Preprocessor:
     def __init__(self, config: PreProcessConfig):
         self.config = config
-        self.in_dir = config["path"]["raw_path"]
+        self.in_dir = config["path"]["data_path"]
         self.out_dir = config["path"]["preprocessed_path"]
         self.val_size = config["val_size"]
         self.sampling_rate = config["audio"]["sampling_rate"]
@@ -139,7 +138,6 @@ class Preprocessor:
 
     def process_utterance(self, speaker: str, basename: str) -> Tuple[str, np.ndarray, np.ndarray]:
         wav_path = os.path.join(self.in_dir, speaker, "{}.wav".format(basename))
-        text_path = os.path.join(self.in_dir, speaker, "{}.lab".format(basename))
         tg_path = os.path.join(
             self.out_dir, "TextGrid", speaker, "{}.TextGrid".format(basename)
         )
@@ -160,10 +158,6 @@ class Preprocessor:
         wav = wav[
             int(self.sampling_rate * start) : int(self.sampling_rate * end)
         ].astype(np.float32)
-
-        # Read raw text
-        with open(text_path, "r", encoding="utf8") as f:
-            raw_text = f.readline().strip("\n")
 
         # Compute fundamental frequency
         pitch, t = pw.dio(
@@ -195,7 +189,7 @@ class Preprocessor:
         )
 
         return (
-            "|".join([basename, speaker, text, raw_text]),
+            "|".join([basename, speaker, text]),
             self.remove_outlier(pitch),
             mel_spectrogram.shape[1],
         )

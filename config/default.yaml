@@ -1,7 +1,6 @@
 preprocess:
   path:
-    corpus_path: "../jsut_ver1.1/basic5000"
-    raw_path: "./raw_data/JSUT"
+    data_path: "../jsut_ver1.1/basic5000"
     preprocessed_path: "./preprocessed_data/JSUT"
   val_size: 100
   audio:
