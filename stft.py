@@ -250,7 +250,7 @@ class TacotronSTFT(torch.nn.Module):
         return mel_output
 
 
-def get_mel_from_wav(audio: np.ndarray, _stft: TacotronSTFT) -> np.ndarry:
+def get_mel_from_wav(audio: np.ndarray, _stft: TacotronSTFT) -> np.ndarray:
     audio = torch.FloatTensor(audio).unsqueeze(0)
     audio = torch.autograd.Variable(audio, requires_grad=False)
     melspec = _stft.mel_spectrogram(audio)
