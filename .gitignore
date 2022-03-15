@@ -1,1 +1,8 @@
 .idea/
+
+# data, checkpoint, and models
+preprocessed_data/
+output/
+*.npy
+*.TextGrid
+fregan/*.pth.tar
