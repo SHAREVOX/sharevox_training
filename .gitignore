@@ -6,3 +6,5 @@ output/
 *.npy
 *.TextGrid
 fregan/*.pth.tar
+
+*.pyc
