@@ -120,6 +120,7 @@ class MelSpectrogramDecoder(nn.Module):
             torch.nn.Dropout(dropout),
         )
 
+        self.encoder = Encoder(model_config["encoder"])
         self.decoder = Encoder(model_config["decoder"])
         mel_channels = 80
         self.mel_linear = nn.Linear(hidden, mel_channels)
