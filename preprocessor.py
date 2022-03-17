@@ -112,7 +112,7 @@ class Preprocessor:
             for j, accent in enumerate(accents):
                 basename = basenames[j]
                 accent_seq = np.array([accent_to_id[a] for a in accent.split(" ")])
-                accent_filename = f"{basename}.npy"
+                accent_filename = f"{speaker}-accent-{basename}.npy"
                 np.save(os.path.join(self.out_dir, "accent", accent_filename), accent_seq)
 
         # Save files
@@ -148,7 +148,7 @@ class Preprocessor:
         textgrid = tgt.io.read_textgrid(tg_path)
         phones_tier = textgrid.get_tier_by_name("phoneme")
         phone, duration, start, end = self.get_alignment(phones_tier)
-        text = "{" + " ".join(phone) + "}"
+        text = " ".join(phone)
         if start >= end:
             raise RuntimeError()
 
