@@ -18,7 +18,7 @@ def window_sumsquare(
     win_length: int,
     n_fft: int,
     dtype: Type[np.generic] = np.float32,
-    norm: Optional[np.numeric] = None,
+    norm: Optional[np.float] = None,
 ) -> np.ndarray:
     """
     # from librosa 0.6
