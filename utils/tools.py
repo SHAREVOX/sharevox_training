@@ -8,7 +8,6 @@ from dataset import ReProcessedItem, ReProcessedTextItem
 
 ReProcessedItemTorch = Tuple[
     List[str],
-    List[str],
     Tensor,
     Tensor,
     LongTensor,
@@ -22,7 +21,6 @@ ReProcessedItemTorch = Tuple[
 ]
 
 ReProcessedTextItemTorch = Tuple[
-    List[str],
     List[str],
     Tensor,
     Tensor,
@@ -43,10 +41,9 @@ def to_device(data: ReProcessedTextItem, device: TorchDevice) -> ReProcessedText
 
 
 def to_device(data: Any, device: TorchDevice):
-    if len(data) == 12:
+    if len(data) == 11:
         (
             ids,
-            raw_texts,
             speakers,
             phonemes,
             phoneme_lens,
@@ -70,7 +67,6 @@ def to_device(data: Any, device: TorchDevice):
 
         return (
             ids,
-            raw_texts,
             speakers,
             phonemes,
             phoneme_lens,
@@ -83,12 +79,12 @@ def to_device(data: Any, device: TorchDevice):
             durations,
         )
 
-    if len(data) == 7:
-        (ids, raw_texts, speakers, phonemes, phoneme_lens, max_phoneme_len, accents) = data
+    if len(data) == 6:
+        (ids, speakers, phonemes, phoneme_lens, max_phoneme_len, accents) = data
 
         speakers = torch.from_numpy(speakers).long().to(device)
         phonemes = torch.from_numpy(phonemes).long().to(device)
         phoneme_lens = torch.from_numpy(phoneme_lens).to(device)
         accents = torch.from_numpy(accents).long().to(device)
 
-        return ids, raw_texts, speakers, phonemes, phoneme_lens, max_phoneme_len, accents
+        return ids, speakers, phonemes, phoneme_lens, max_phoneme_len, accents

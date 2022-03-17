@@ -47,7 +47,6 @@ class DatasetItem(TypedDict):
     id: str
     speaker: int
     text: np.ndarray
-    raw_text: str
     accent: np.ndarray
     mel: np.ndarray
     pitch: np.ndarray
@@ -55,7 +54,6 @@ class DatasetItem(TypedDict):
 
 
 ReProcessedItem = Tuple[
-    List[str],
     List[str],
     np.ndarray,
     np.ndarray,
@@ -92,7 +90,7 @@ class Dataset(TorchDataset):
         self.preprocessed_path = preprocess_config["path"]["preprocessed_path"]
         self.batch_size = train_config["optimizer"]["batch_size"]
 
-        self.basename, self.speaker, self.text, self.raw_text = self.process_meta(
+        self.basename, self.speaker, self.text = self.process_meta(
             filename
         )
         with open(os.path.join(self.preprocessed_path, "speakers.json")) as f:
@@ -107,7 +105,6 @@ class Dataset(TorchDataset):
         basename = self.basename[idx]
         speaker = self.speaker[idx]
         speaker_id = self.speaker_map[speaker]
-        raw_text = self.raw_text[idx]
         phone = np.array([phoneme_to_id[p] for p in self.text[idx].split(" ")])
         accent_path = os.path.join(
             self.preprocessed_path,
@@ -138,7 +135,6 @@ class Dataset(TorchDataset):
             id=basename,
             speaker=speaker_id,
             text=phone,
-            raw_text=raw_text,
             accent=accent,
             mel=mel,
             pitch=pitch,
@@ -149,27 +145,24 @@ class Dataset(TorchDataset):
 
     def process_meta(
         self, filename: str
-    ) -> Tuple[List[str], List[str], List[str], List[str]]:
+    ) -> Tuple[List[str], List[str], List[str]]:
         with open(
             os.path.join(self.preprocessed_path, filename), "r", encoding="utf-8"
         ) as f:
             name: List[str] = []
             speaker: List[str] = []
             text: List[str] = []
-            raw_text: List[str] = []
             for line in f.readlines():
-                n, s, t, r = line.strip("\n").split("|")
+                n, s, t = line.strip("\n").split("|")
                 name.append(n)
                 speaker.append(s)
                 text.append(t)
-                raw_text.append(r)
-            return name, speaker, text, raw_text
+            return name, speaker, text
 
     def reprocess(self, data: List[DatasetItem], idxs: List[int]) -> ReProcessedItem:
         ids = [data[idx]["id"] for idx in idxs]
         speakers = [data[idx]["speaker"] for idx in idxs]
         texts = [data[idx]["text"] for idx in idxs]
-        raw_texts = [data[idx]["raw_text"] for idx in idxs]
         accents = [data[idx]["accent"] for idx in idxs]
         mels = [data[idx]["mel"] for idx in idxs]
         pitches = [data[idx]["pitch"] for idx in idxs]
@@ -190,7 +183,6 @@ class Dataset(TorchDataset):
 
         return (
             ids,
-            raw_texts,
             speakers,
             texts,
             text_lens,

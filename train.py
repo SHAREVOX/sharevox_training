@@ -51,7 +51,6 @@ def evaluate(
             batch: ReProcessedItemTorch
             (
                 ids,
-                raw_texts,
                 speakers,
                 phonemes,
                 phoneme_lens,
@@ -203,7 +202,6 @@ def main(restore_step: int, speaker_num, config: Config):
                 batch: ReProcessedItemTorch
                 (
                     ids,
-                    raw_texts,
                     speakers,
                     phonemes,
                     phoneme_lens,
