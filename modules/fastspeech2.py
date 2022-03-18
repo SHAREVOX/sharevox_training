@@ -160,7 +160,7 @@ class MelSpectrogramDecoder(nn.Module):
             -1, max_phoneme_len, -1
         )
 
-        pitch_embeds = self.pitch_embedding(pitches.transpose(1, 2)).transpose(1, 2)
+        pitch_embeds = self.pitch_embedding(pitches.unsqueeze(1)).transpose(1, 2)
         hs = hs + pitch_embeds
         hs = self.length_regulator(hs, durations)  # (B, T_feats, adim)
 
