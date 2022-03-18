@@ -108,6 +108,7 @@ def evaluate(
                     mel_lens=mel_lens,
                     vocoder=vocoder,
                     config=config,
+                    synthesis_target=(step == int(config["train"]["step"]["val_step"]))
                 )
 
                 log(

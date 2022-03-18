@@ -52,7 +52,8 @@ def synth_one_sample(
     mel_lens: LongTensor,
     vocoder: fregan.Generator,
     config: Config,
-) -> Tuple[plt.Figure, np.ndarray, np.ndarray, str]:
+    synthesis_target: bool = False
+) -> Tuple[plt.Figure, Optional[np.ndarray], np.ndarray, str]:
     basename = ids[0]
     phoneme_len = phoneme_lens[0].item()
     mel_len = mel_lens[0].item()
@@ -70,11 +71,13 @@ def synth_one_sample(
         ["Synthesized Spectrogram", "Ground-Truth Spectrogram"],
     )
 
-    wav_reconstruction = vocoder_infer(
-        mel_target.unsqueeze(0),
-        vocoder,
-        config,
-    )[0]
+    wav_reconstruction = None
+    if synthesis_target:
+        wav_reconstruction = vocoder_infer(
+            mel_target.unsqueeze(0),
+            vocoder,
+            config,
+        )[0]
     wav_prediction = vocoder_infer(
         mel_prediction.unsqueeze(0),
         vocoder,
