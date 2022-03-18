@@ -129,7 +129,8 @@ class Encoder(nn.Module):
         else:
             xs = self.embed(xs)
 
-        xs, masks = self.encoders(xs, masks)
+        for encoder in self.encoders:
+            xs, masks = encoder(xs, masks)
 
         if self.normalize_before:
             xs = self.after_norm(xs)
