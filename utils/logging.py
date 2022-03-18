@@ -19,16 +19,16 @@ def log(
         logger.add_scalar("Loss/total_loss", losses[0], step)
         logger.add_scalar("Loss/mel_loss", losses[1], step)
         logger.add_scalar("Loss/mel_postnet_loss", losses[2], step)
-        logger.add_scalar("Loss/pitch_loss", losses[3], step)
-        logger.add_scalar("Loss/energy_loss", losses[4], step)
-        logger.add_scalar("Loss/duration_loss", losses[5], step)
+        logger.add_scalar("Loss/duration_loss", losses[3], step)
+        logger.add_scalar("Loss/pitch_loss", losses[4], step)
 
     if fig is not None:
-        logger.add_figure(tag, fig)
+        logger.add_figure(tag, fig, step)
 
     if audio is not None:
         logger.add_audio(
             tag,
             audio / max(abs(audio)),
+            step,
             sample_rate=sampling_rate,
         )
