@@ -122,8 +122,8 @@ class MelSpectrogramDecoder(nn.Module):
 
         self.encoder = Encoder(model_config["encoder"])
         self.decoder = Encoder(model_config["decoder"])
-        mel_channels = 80
-        self.mel_linear = nn.Linear(hidden, mel_channels)
+        self.mel_channels = 80
+        self.mel_linear = nn.Linear(hidden, self.mel_channels)
         self.postnet = Postnet()
 
     def forward(
@@ -171,7 +171,7 @@ class MelSpectrogramDecoder(nn.Module):
 
         outputs, _ = self.decoder(hs, h_masks)
         outputs = self.mel_linear(outputs).view(
-            outputs.size(0), -1, self.odim
+            outputs.size(0), -1, self.mel_channels
         )  # (B, T_feats, odim)
 
         postnet_outputs = outputs + self.postnet(
