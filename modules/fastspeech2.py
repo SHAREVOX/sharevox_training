@@ -83,10 +83,10 @@ class PitchAndDurationPredictor(nn.Module):
         # forward duration predictor and variance predictors
         d_masks = make_pad_mask(phoneme_lens).to(x.device)
 
-        pitches: Tensor = self.pitch_predictor(hs, d_masks.unsqueeze(-1))
-        log_durations: Tensor = self.duration_predictor(hs, d_masks)
+        log_pitches: Tensor = self.pitch_predictor(hs, d_masks.unsqueeze(-1))
+        log_durations: Tensor = self.duration_predictor(hs, d_masks.unsqueeze(-1))
 
-        return pitches, log_durations
+        return log_pitches, log_durations
 
 
 class MelSpectrogramDecoder(nn.Module):
