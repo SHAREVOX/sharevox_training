@@ -33,19 +33,20 @@ class PositionalEncoding(nn.Module):
         Returns:
             Tensor: Encoded tensor. Its shape is (batch, time, ...)
         """
-        pe = torch.zeros(x.size(1), self.d_model // 2, 2)
-        position = torch.arange(0, x.size(1), dtype=torch.float32).unsqueeze(1)
+        pe = torch.zeros(x.shape[1], self.d_model).to(device=x.device)
+        # pe = torch.zeros(x.size(1), self.d_model // 2, 2)
+        position = torch.arange(0, x.shape[1], dtype=torch.float32).unsqueeze(1)
         div_term = torch.exp(
             torch.arange(0, self.d_model, 2, dtype=torch.float32)
             * -(math.log(10000.0) / self.d_model)
         )
-        # pe[:, 0::2] = torch.sin(position * div_term)
-        # pe[:, 1::2] = torch.cos(position * div_term)
-        pe[:, :, 0] = torch.sin(position * div_term)
-        pe[:, :, 1] = torch.cos(position * div_term)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        # pe[:, :, 0] = torch.sin(position * div_term)
+        # pe[:, :, 1] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)
 
-        x = x * self.xscale + pe[:, : x.size(1)]
+        x = x * self.xscale + pe[:, : x.shape[1]]
         return self.dropout(x)
 
 
