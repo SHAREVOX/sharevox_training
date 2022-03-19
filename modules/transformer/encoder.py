@@ -13,7 +13,6 @@ from modules.transformer.layer_norm import LayerNorm
 from modules.transformer.multi_layer_conv import Conv1dLinear
 from modules.transformer.multi_layer_conv import MultiLayeredConv1d
 from modules.transformer.positionwise_feed_forward import PositionwiseFeedForward
-from modules.transformer.subsampling import Conv2dSubsampling
 
 LayerTypeLiteral = Literal["linear", "conv1d", "conv1d-linear"]
 
@@ -124,10 +123,7 @@ class Encoder(nn.Module):
             Tensor: Mask tensor (#batch, time).
 
         """
-        if isinstance(self.embed, Conv2dSubsampling):
-            xs, masks = self.embed(xs, masks)
-        else:
-            xs = self.embed(xs)
+        xs = self.embed(xs)
 
         for encoder in self.encoders:
             xs, masks = encoder(xs, masks)
@@ -153,10 +149,7 @@ class Encoder(nn.Module):
             List[Tensor]: List of new cache tensors.
 
         """
-        if isinstance(self.embed, Conv2dSubsampling):
-            xs, masks = self.embed(xs, masks)
-        else:
-            xs = self.embed(xs)
+        xs = self.embed(xs)
         if cache is None:
             cache = [None for _ in range(len(self.encoders))]
         new_cache = []
