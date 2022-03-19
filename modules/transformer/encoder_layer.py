@@ -63,7 +63,7 @@ class EncoderLayer(nn.Module):
             self.concat_linear = nn.Linear(size + size, size)
         self.stochastic_depth_rate = stochastic_depth_rate
 
-    def forward(self, x: Tensor, mask: Tensor, cache: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
+    def forward(self, x: Tensor, mask: Optional[Tensor], cache: Optional[Tensor] = None) -> Tuple[Tensor,  Optional[Tensor]]:
         """Compute encoded features.
 
         Args:

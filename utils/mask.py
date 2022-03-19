@@ -5,7 +5,7 @@ from torch import LongTensor, Tensor
 
 
 def make_pad_mask(
-    lengths: Union[LongTensor, List],
+    lengths: Union[LongTensor, List[int]],
     xs: Optional[Tensor] = None,
     length_dim: int = -1,
     maxlen: Optional[int] = None
@@ -120,7 +120,7 @@ def make_pad_mask(
 
 
 def make_non_pad_mask(
-    lengths: Union[LongTensor, List],
+    lengths: Union[LongTensor, List[int]],
     xs: Optional[Tensor] = None,
     length_dim: int = -1
 ):

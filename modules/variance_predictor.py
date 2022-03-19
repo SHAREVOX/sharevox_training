@@ -42,7 +42,7 @@ class VariancePredictor(nn.Module):
             ]
         self.linear = nn.Linear(self.filter_size, 1)
 
-    def forward(self, xs: TensorType[float], x_masks: Optional[TensorType[bool]] = None) -> TensorType[float]:
+    def forward(self, xs: Tensor, x_masks: Optional[Tensor] = None) -> Tensor:
         """Calculate forward propagation.
         Args:
             xs (Tensor): Batch of input sequences (B, Tmax, idim).

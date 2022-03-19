@@ -111,7 +111,7 @@ class Encoder(nn.Module):
             raise NotImplementedError("Support only linear or conv1d.")
         return positionwise_layer, positionwise_layer_args
 
-    def forward(self, xs: Tensor, masks: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, xs: Tensor, masks: Optional[Tensor]) -> Tuple[Tensor, Optional[Tensor]]:
         """Encode input sequence.
 
         Args:
@@ -134,8 +134,8 @@ class Encoder(nn.Module):
         return xs, masks
 
     def forward_one_step(
-        self, xs: Tensor, masks: Tensor, cache: Optional[List[Tensor]] = None
-    ) -> Tuple[Tensor, Tensor, Optional[List[Tensor]]]:
+        self, xs: Tensor, masks: Optional[Tensor], cache: Optional[List[Tensor]] = None
+    ) -> Tuple[Tensor, Optional[Tensor], Optional[List[Tensor]]]:
         """Encode input frame.
 
         Args:

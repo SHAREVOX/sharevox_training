@@ -55,7 +55,7 @@ class MultiHeadedAttention(nn.Module):
 
         return q, k, v
 
-    def forward_attention(self, value: Tensor, scores: Tensor, mask: Tensor) -> Tensor:
+    def forward_attention(self, value: Tensor, scores: Tensor, mask: Optional[Tensor]) -> Tensor:
         """Compute attention context vector.
         Args:
             value (Tensor): Transformed value (#batch, n_head, time2, d_k).
