@@ -10,11 +10,16 @@ from torch import nn, Tensor
 
 
 class LayerNorm(nn.Module):
-    def __init__(self, nout: int):
+    def __init__(self, nout: int, dim: int = -1):
+        """Construct an LayerNorm object."""
         super(LayerNorm, self).__init__()
         self.layer_norm = nn.LayerNorm(nout, eps=1e-12)
+        self.dim = dim
 
     def forward(self, x: Tensor) -> Tensor:
-        x = self.layer_norm(x.transpose(1, -1))
-        x = x.transpose(1, -1)
-        return x
+        if self.dim == -1:
+            return self.layer_norm(x)
+        return (
+            self.layer_norm(x.transpose(self.dim, -1))
+            .transpose(self.dim, -1)
+        )
