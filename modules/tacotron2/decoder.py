@@ -8,8 +8,6 @@
 
 from torch import nn, Tensor
 
-import six
-
 
 class Postnet(nn.Module):
     """Postnet module for Spectrogram prediction network.
@@ -43,7 +41,7 @@ class Postnet(nn.Module):
         """
         super(Postnet, self).__init__()
         self.postnet = nn.ModuleList()
-        for layer in six.moves.range(n_layers - 1):
+        for layer in range(n_layers - 1):
             ichans = dim if layer == 0 else n_chans
             ochans = dim if layer == n_layers - 1 else n_chans
             if use_batch_norm:
@@ -115,6 +113,6 @@ class Postnet(nn.Module):
         Returns:
             Tensor: Batch of padded output tensor. (B, dim, Tmax).
         """
-        for i in six.moves.range(len(self.postnet)):
-            xs = self.postnet[i](xs)
+        for postnet in self.postnet:
+            xs = postnet(xs)
         return xs
