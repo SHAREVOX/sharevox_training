@@ -136,7 +136,7 @@ def evaluate(
     loss_means = [loss_sum / len(dataset) for loss_sum in loss_sums]
     log(logger, step, losses=loss_means)
 
-    message = "Validation Step {}, Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Pitch Loss: {:.4f}, Duration Loss: {:.4f}".format(
+    message = "Validation Step {}, Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}".format(
         *([step] + loss_means)
     )
 
