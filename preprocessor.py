@@ -3,7 +3,7 @@ import random
 import json
 import argparse
 import yaml
-
+from scipy.interpolate import interp1d
 
 from text import accent_to_id
 
@@ -172,6 +172,25 @@ class Preprocessor:
         pitch = pitch[: sum(duration)]
         if np.sum(pitch != 0) <= 1:
             raise RuntimeError()
+
+        nonzero_ids = np.where(pitch != 0)[0]
+        interp_fn = interp1d(
+            nonzero_ids,
+            pitch[nonzero_ids],
+            fill_value=(pitch[nonzero_ids[0]], pitch[nonzero_ids[-1]]),
+            bounds_error=False,
+        )
+        pitch: np.ndarray = interp_fn(np.arange(0, len(pitch)))
+
+        # Phoneme-level average
+        pos = 0
+        for i, d in enumerate(duration):
+            if d > 0:
+                pitch[i] = np.mean(pitch[pos : pos + d])
+            else:
+                pitch[i] = 0
+            pos += d
+        pitch = pitch[: len(duration)]
 
         # Compute mel-scale spectrogram
         mel_spectrogram = get_mel_from_wav(wav, self.STFT)
