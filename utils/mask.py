@@ -91,7 +91,7 @@ def make_pad_mask(
 
     if not isinstance(lengths, list):
         lengths = lengths.tolist()
-    bs = int(len(lengths))
+    bs = int(lengths.shape[0])
     if maxlen is None:
         if xs is None:
             maxlen = int(max(lengths))
