@@ -36,7 +36,7 @@ class VariancePredictor(nn.Module):
                         padding=(self.kernel_size - 1) // 2,
                     ),
                     nn.ReLU(),
-                    LayerNorm(self.filter_size),
+                    LayerNorm(self.filter_size, dim=1),
                     nn.Dropout(self.dropout),
                 )
             ]
