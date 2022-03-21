@@ -54,8 +54,7 @@ class VariancePredictor(nn.Module):
         for f in self.conv:
             xs = f(xs)  # (B, C, Tmax)
 
-        # NOTE: calculate in log domain
-        xs = self.linear(xs.transpose(1, -1)).squeeze(-1)  # (B, Tmax)
+        xs = self.linear(xs.transpose(1, 2))  # (B, Tmax, 1)
 
         if x_masks is not None:
             xs = xs.masked_fill(x_masks, 0.0)
