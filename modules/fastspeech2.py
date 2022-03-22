@@ -27,12 +27,14 @@ class ModelConfig(TypedDict):
     variance_embedding: VarianceEmbedding
 
 
-def source_mask(self: nn.Module, ilens: LongTensor) -> Tensor:
-    x_masks = make_non_pad_mask(ilens).to(next(self.parameters()).device)
-    return x_masks.unsqueeze(-2)
+class BaseModule(nn.Module):
+    def source_mask(self, ilens: LongTensor) -> Tensor:
+        x_masks = make_non_pad_mask(ilens).to(next(self.parameters()).device)
+        # x_masks = make_non_pad_mask(ilens)
+        return x_masks.unsqueeze(-2)
 
 
-class PitchAndDurationPredictor(nn.Module):
+class PitchAndDurationPredictor(BaseModule):
     def __init__(self, model_config: ModelConfig, speaker_num: int):
         super(PitchAndDurationPredictor, self).__init__()
 
@@ -66,22 +68,33 @@ class PitchAndDurationPredictor(nn.Module):
         phonemes: Tensor,
         accents: Tensor,
         speakers: Tensor,
-        phoneme_lens: LongTensor,
-        max_phoneme_len: LongTensor,
+        phoneme_lens: Optional[LongTensor] = None,
+        max_phoneme_len: Optional[LongTensor] = None,
     ):
         # forward encoder
-        x_masks = source_mask(self, phoneme_lens)  # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
+        if phoneme_lens is None:
+            x_masks = torch.ones_like(phonemes).squeeze()
+        else:
+            x_masks = self.source_mask(phoneme_lens)  # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
 
         x = self.phoneme_embedding(phonemes) + self.accent_embedding(accents)
 
         hs, _ = self.encoder(x, x_masks)  # (B, Tmax, adim) -> torch.Size([32, 121, 256])
 
-        hs = hs + self.speaker_embedding(speakers).unsqueeze(1).expand(
-            -1, max_phoneme_len, -1
-        )
+        if max_phoneme_len is None:
+            hs = hs + self.speaker_embedding(speakers).unsqueeze(1).expand(
+                -1, phonemes.shape[1], -1
+            )
+        else:
+            hs = hs + self.speaker_embedding(speakers).unsqueeze(1).expand(
+                -1, max_phoneme_len, -1
+            )
 
         # forward duration predictor and variance predictors
-        d_masks = make_pad_mask(phoneme_lens).to(x.device)
+        if phoneme_lens is None:
+            d_masks = ~torch.ones_like(phonemes).to(device=x.device, dtype=torch.bool)
+        else:
+            d_masks = make_pad_mask(phoneme_lens).to(x.device)
 
         log_pitches: Tensor = self.pitch_predictor(hs, d_masks.unsqueeze(-1))
         log_durations: Tensor = self.duration_predictor(hs, d_masks.unsqueeze(-1))
@@ -89,14 +102,13 @@ class PitchAndDurationPredictor(nn.Module):
         return log_pitches, log_durations
 
 
-class MelSpectrogramDecoder(nn.Module):
+class FeatureEmbedder(BaseModule):
     def __init__(self, model_config: ModelConfig, speaker_num: int):
-        super(MelSpectrogramDecoder, self).__init__()
+        super(FeatureEmbedder, self).__init__()
 
         kernel_size = model_config["variance_embedding"]["kernel_size"]
         dropout = model_config["variance_embedding"]["dropout"]
 
-        self.length_regulator = LengthRegulator()
         padding_idx = 0
         hidden = model_config["encoder"]["hidden"]
         self.phoneme_embedding = nn.Embedding(
@@ -121,6 +133,54 @@ class MelSpectrogramDecoder(nn.Module):
         )
 
         self.encoder = Encoder(model_config["encoder"])
+
+    def forward(
+        self,
+        phonemes: Tensor,
+        pitches: Tensor,
+        speakers: Tensor,
+        phoneme_lens: Optional[LongTensor] = None,
+        max_phoneme_len: Optional[LongTensor] = None,
+    ):
+        """Feature Embedder's forward
+        Args:
+            phonemes (Tensor): Phoneme Sequences
+            pitches (Tensor): Pitch Sequences
+            speakers (Tensor): Speaker Sequences
+            phoneme_lens (LongTensor): Phoneme Sequence Lengths
+            max_phoneme_len (Optional[LongTensor]): Max Phoneme Sequence Length
+
+        Returns:
+            feature_embeded (Tensor): Feature embedded tensor
+        """
+        if phoneme_lens is None:
+            x_masks = torch.ones_like(phonemes).squeeze()
+        else:
+            x_masks = self.source_mask(phoneme_lens)  # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
+
+        x = self.phoneme_embedding(phonemes)
+
+        feature_embeded, _ = self.encoder(x, x_masks)  # (B, Tmax, adim) -> torch.Size([32, 121, 256])
+
+        if max_phoneme_len is None:
+            feature_embeded = feature_embeded + self.speaker_embedding(speakers).unsqueeze(1).expand(
+                -1, phonemes.shape[1], -1
+            )
+        else:
+            feature_embeded = feature_embeded + self.speaker_embedding(speakers).unsqueeze(1).expand(
+                -1, max_phoneme_len, -1
+            )
+
+        pitch_embeds = self.pitch_embedding(pitches.unsqueeze(1)).transpose(1, 2)
+        feature_embeded += pitch_embeds
+        return feature_embeded
+
+
+class MelSpectrogramDecoder(BaseModule):
+    def __init__(self, model_config: ModelConfig):
+        super(MelSpectrogramDecoder, self).__init__()
+
+        hidden = model_config["encoder"]["hidden"]
         self.decoder = Encoder(model_config["decoder"])
         self.mel_channels = 80
         self.mel_linear = nn.Linear(hidden, self.mel_channels)
@@ -128,48 +188,24 @@ class MelSpectrogramDecoder(nn.Module):
 
     def forward(
         self,
-        phonemes: Tensor,
-        speakers: Tensor,
-        phoneme_lens: LongTensor,
-        max_phoneme_len: LongTensor,
-        pitches: Tensor,
-        durations: LongTensor,
-        mel_lens: Optional[LongTensor],
+        length_regulated_tensor: Tensor,
+        mel_lens: Optional[LongTensor] = None,
     ):
         """Mel-spectrogram Decoder's forward
         Args:
-            phonemes (Tensor): Phoneme Sequences
-            speakers (Tensor): Speaker Sequences
-            phoneme_lens (LongTensor): Phoneme Sequence Lengths
-            max_phoneme_len (LongTensor): Max Phoneme Sequence Length
-            pitches (Tensor): Pitch Sequences
-            durations (LongTensor): Duration Sequences
+            length_regulated_tensor (Tensor): Length Regulated Tensor
             mel_lens (Optional[LongTensor]): Mel-spectrogram Lengths
 
         Returns:
             outputs (Tensor): Mel-spectrogram
             postnet_outputs (Tensor): Mel-spectrogram added postnet result
         """
-        x_masks = source_mask(self, phoneme_lens)  # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
-
-        x = self.phoneme_embedding(phonemes)
-
-        hs, _ = self.encoder(x, x_masks)  # (B, Tmax, adim) -> torch.Size([32, 121, 256])
-
-        hs = hs + self.speaker_embedding(speakers).unsqueeze(1).expand(
-            -1, max_phoneme_len, -1
-        )
-
-        pitch_embeds = self.pitch_embedding(pitches.unsqueeze(1)).transpose(1, 2)
-        hs = hs + pitch_embeds
-        hs = self.length_regulator(hs, durations)  # (B, T_feats, adim)
-
         if mel_lens is not None:
-            h_masks = source_mask(self, mel_lens)
+            h_masks = self.source_mask(mel_lens)
         else:
             h_masks = None
 
-        outputs, _ = self.decoder(hs, h_masks)
+        outputs, _ = self.decoder(length_regulated_tensor, h_masks)
         outputs = self.mel_linear(outputs).view(
             outputs.size(0), -1, self.mel_channels
         )  # (B, T_feats, odim)

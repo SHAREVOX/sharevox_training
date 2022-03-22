@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 from dataset import TrainConfig
-from modules.fastspeech2 import PitchAndDurationPredictor, MelSpectrogramDecoder, ModelConfig
+from modules.fastspeech2 import PitchAndDurationPredictor, MelSpectrogramDecoder, ModelConfig, FeatureEmbedder
 
 
 class ScheduledOptim:
@@ -11,6 +11,7 @@ class ScheduledOptim:
     def __init__(
         self,
         variance_model: PitchAndDurationPredictor,
+        embedder_model: FeatureEmbedder,
         decoder_model: MelSpectrogramDecoder,
         train_config: TrainConfig,
         model_config: ModelConfig,
@@ -19,6 +20,12 @@ class ScheduledOptim:
 
         self._variance_optimizer = torch.optim.Adam(
             variance_model.parameters(),
+            betas=train_config["optimizer"]["betas"],
+            eps=train_config["optimizer"]["eps"],
+            weight_decay=train_config["optimizer"]["weight_decay"],
+        )
+        self._embedder_optimizer = torch.optim.Adam(
+            embedder_model.parameters(),
             betas=train_config["optimizer"]["betas"],
             eps=train_config["optimizer"]["eps"],
             weight_decay=train_config["optimizer"]["weight_decay"],
@@ -39,15 +46,18 @@ class ScheduledOptim:
     def step_and_update_lr(self) -> None:
         self._update_learning_rate()
         self._variance_optimizer.step()
+        self._embedder_optimizer.step()
         self._decoder_optimizer.step()
 
     def zero_grad(self) -> None:
         # print(self.init_lr)
         self._variance_optimizer.zero_grad()
+        self._embedder_optimizer.zero_grad()
         self._decoder_optimizer.zero_grad()
 
     def load_state_dict(self, path: dict) -> None:
         self._variance_optimizer.load_state_dict(path["variance"])
+        self._embedder_optimizer.load_state_dict(path["embedder"])
         self._decoder_optimizer.load_state_dict(path["decoder"])
 
     def _get_lr_scale(self) -> None:
@@ -68,6 +78,8 @@ class ScheduledOptim:
         lr = self.init_lr * self._get_lr_scale()
 
         for param_group in self._variance_optimizer.param_groups:
+            param_group["lr"] = lr
+        for param_group in self._embedder_optimizer.param_groups:
             param_group["lr"] = lr
         for param_group in self._decoder_optimizer.param_groups:
             param_group["lr"] = lr

@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 import fregan
 from dataset import Dataset
+from modules.length_regulator import LengthRegulator
 from modules.loss import FastSpeech2Loss
 from utils.logging import log
 from utils.model import Config, get_model, get_param_num, get_vocoder
@@ -22,7 +23,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def evaluate(
     variance_model: DataParallel,  # PitchAndDurationPredictor
+    embedder_model: DataParallel,  # FeatureEmbedder
     decoder_model: DataParallel,  # MelSpectrogramDecoder
+    length_regulator: DataParallel,
     step: int,
     config: Config,
     logger: SummaryWriter,
@@ -70,14 +73,19 @@ def evaluate(
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                 )
-
-                outputs, postnet_outputs = decoder_model(
+                feature_embedded = embedder_model(
                     phonemes=phonemes,
+                    pitches=pitches,
                     speakers=speakers,
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
-                    pitches=pitches,
-                    durations=durations,
+                )
+                length_regulated_tensor = length_regulator(
+                    xs=feature_embedded,
+                    ds=durations,
+                )
+                outputs, postnet_outputs = decoder_model(
+                    length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
 
@@ -161,10 +169,13 @@ def main(restore_step: int, speaker_num, config: Config):
     )
 
     # Prepare model
-    variance_model, decoder_model, optimizer = get_model(restore_step, config, device, speaker_num, train=True)
+    variance_model, embedder_model, decoder_model, optimizer = get_model(restore_step, config, device, speaker_num, train=True)
     variance_model = nn.DataParallel(variance_model)
+    embedder_model = nn.DataParallel(embedder_model)
     decoder_model = nn.DataParallel(decoder_model)
-    num_param = get_param_num(variance_model) + get_param_num(decoder_model)
+    length_regulator = nn.DataParallel(LengthRegulator())
+
+    num_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model)
     Loss = FastSpeech2Loss().to(device)
     print("Number of FastSpeech2 Parameters:", num_param)
 
@@ -223,13 +234,19 @@ def main(restore_step: int, speaker_num, config: Config):
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                 )
-                outputs, postnet_outputs = decoder_model(
+                feature_embedded = embedder_model(
                     phonemes=phonemes,
+                    pitches=pitches,
                     speakers=speakers,
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
-                    pitches=pitches,
-                    durations=durations,
+                )
+                length_regulated_tensor = length_regulator(
+                    xs=feature_embedded,
+                    ds=durations,
+                )
+                outputs, postnet_outputs = decoder_model(
+                    length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
 
@@ -253,6 +270,7 @@ def main(restore_step: int, speaker_num, config: Config):
                 if step % grad_acc_step == 0:
                     # Clipping gradients to avoid gradient explosion
                     nn.utils.clip_grad_norm_(variance_model.parameters(), grad_clip_thresh)
+                    nn.utils.clip_grad_norm_(embedder_model.parameters(), grad_clip_thresh)
                     nn.utils.clip_grad_norm_(decoder_model.parameters(), grad_clip_thresh)
 
                     # Update weights
@@ -306,22 +324,28 @@ def main(restore_step: int, speaker_num, config: Config):
 
                 if step % val_step == 0:
                     variance_model.eval()
+                    embedder_model.eval()
                     decoder_model.eval()
-                    message = evaluate(variance_model, decoder_model, step, config, val_logger, vocoder)
+                    message = evaluate(
+                        variance_model, embedder_model, decoder_model, length_regulator, step, config, val_logger, vocoder
+                    )
                     with open(os.path.join(val_log_path, "log.txt"), "a") as f:
                         f.write(message + "\n")
                     outer_bar.write(message)
 
                     variance_model.train()
+                    embedder_model.train()
                     decoder_model.train()
 
                 if step % save_step == 0:
                     torch.save(
                         {
                             "variance_model": variance_model.module.state_dict(),
+                            "embedder_model": embedder_model.module.state_dict(),
                             "decoder_model": decoder_model.module.state_dict(),
                             "optimizer": {
                                 "variance": optimizer._variance_optimizer.state_dict(),
+                                "embedder": optimizer._embedder_optimizer.state_dict(),
                                 "decoder": optimizer._decoder_optimizer.state_dict(),
                             },
                         },
