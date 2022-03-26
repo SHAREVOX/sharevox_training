@@ -5,7 +5,8 @@ from torch import nn, Tensor, LongTensor
 from typing import TypedDict, Literal, Optional
 
 from modules.tacotron2.decoder import Postnet
-from modules.transformer.encoder import Encoder, EncoderConfig
+from modules.conformer.encoder import Encoder as ConformerEncoder
+from modules.transformer.encoder import Encoder as TransformerEncoder, EncoderConfig
 from modules.variance_predictor import VariancePredictor, VariancePredictorConfig
 from text import phoneme_symbols, accent_symbols
 from utils.mask import make_non_pad_mask, make_pad_mask
@@ -17,9 +18,9 @@ class VarianceEmbedding(TypedDict):
 
 
 class ModelConfig(TypedDict):
-    # encoder_type: Literal["transformer", "conformer"]
+    encoder_type: Literal["transformer", "conformer"]
     encoder: EncoderConfig
-    # decoder_type: Literal["transformer", "conformer"]
+    decoder_type: Literal["transformer", "conformer"]
     decoder: EncoderConfig
     variance_predictor: VariancePredictorConfig
     variance_embedding: VarianceEmbedding
@@ -53,7 +54,14 @@ class PitchAndDurationPredictor(BaseModule):
             embedding_dim=hidden,
         )
 
-        self.encoder = Encoder(model_config["encoder"])
+        encoder_type = model_config["encoder_type"]
+        if encoder_type == "conformer":
+            self.encoder = ConformerEncoder(model_config["encoder"])
+        elif encoder_type == "transformer":
+            self.encoder = TransformerEncoder(model_config["encoder"])
+        else:
+            raise ValueError("unknown encoder: " + encoder_type)
+
         self.duration_predictor = VariancePredictor(
             hidden, model_config["variance_predictor"]
         )
@@ -130,7 +138,13 @@ class FeatureEmbedder(BaseModule):
             torch.nn.Dropout(dropout),
         )
 
-        self.encoder = Encoder(model_config["encoder"])
+        encoder_type = model_config["encoder_type"]
+        if encoder_type == "conformer":
+            self.encoder = ConformerEncoder(model_config["encoder"])
+        elif encoder_type == "transformer":
+            self.encoder = TransformerEncoder(model_config["encoder"])
+        else:
+            raise ValueError("unknown encoder: " + encoder_type)
 
     def forward(
         self,
@@ -179,7 +193,15 @@ class MelSpectrogramDecoder(BaseModule):
         super(MelSpectrogramDecoder, self).__init__()
 
         hidden = model_config["encoder"]["hidden"]
-        self.decoder = Encoder(model_config["decoder"])
+
+        decoder_type = model_config["encoder_type"]
+        if decoder_type == "conformer":
+            self.decoder = ConformerEncoder(model_config["encoder"])
+        elif decoder_type == "transformer":
+            self.decoder = TransformerEncoder(model_config["encoder"])
+        else:
+            raise ValueError("unknown decoder: " + decoder_type)
+
         self.mel_channels = 80
         self.mel_linear = nn.Linear(hidden, self.mel_channels)
         self.postnet = Postnet()
