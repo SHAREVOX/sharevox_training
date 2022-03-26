@@ -13,8 +13,11 @@ from modules.transformer.layer_norm import LayerNorm
 from modules.transformer.multi_layer_conv import Conv1dLinear
 from modules.transformer.multi_layer_conv import MultiLayeredConv1d
 from modules.transformer.positionwise_feed_forward import PositionwiseFeedForward
+from utils.tools import ActivationType
 
 LayerTypeLiteral = Literal["linear", "conv1d", "conv1d-linear"]
+PosEncLayerTypeLiteral = Literal["abs_pos", "rel_pos"]
+SelfAttnLayerTypeLiteral = Literal["selfattn", "rel_selfattn"]
 
 
 class EncoderConfig(TypedDict):
@@ -26,6 +29,9 @@ class EncoderConfig(TypedDict):
     concat_after: bool
     layer_type: LayerTypeLiteral
     kernel_size: int
+    pos_enc_layer_type: PosEncLayerTypeLiteral
+    self_attn_layer_type: PosEncLayerTypeLiteral
+    activation_type: ActivationType
 
 
 class Encoder(nn.Module):
@@ -34,6 +40,11 @@ class Encoder(nn.Module):
     def __init__(self, config: EncoderConfig):
         """Construct an Encoder object."""
         super(Encoder, self).__init__()
+
+        assert config["pos_enc_layer_type"] == "abs_pos"
+        assert config["self_attn_layer_type"] == "selfattn"
+        assert config["activation_type"] == "relu"
+
         attention_dim = config["hidden"]
         attention_heads = config["heads"]
         linear_units = config["hidden"] * config["heads"] * 2

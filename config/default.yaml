@@ -25,6 +25,9 @@ model:
     concat_after: True
     layer_type: "conv1d"
     kernel_size: 9
+    pos_enc_layer_type: "abs_pos"
+    self_attn_layer_type: "selfattn"
+    activation_type: "relu"
   decoder:
     hidden: 256
     heads: 2
@@ -34,6 +37,9 @@ model:
     concat_after: True
     layer_type: "conv1d"
     kernel_size: 9
+    pos_enc_layer_type: "abs_pos"
+    self_attn_layer_type: "selfattn"
+    activation_type: "relu"
   variance_predictor:
     filter_size: 256
     kernel_size: 3
