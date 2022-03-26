@@ -1,11 +1,9 @@
 import torch
-import numpy as np
 
 from torch import nn, Tensor, LongTensor
 
-from typing import TypedDict, Literal, Tuple, Optional
+from typing import TypedDict, Literal, Optional
 
-from modules.length_regulator import LengthRegulator
 from modules.tacotron2.decoder import Postnet
 from modules.transformer.encoder import Encoder, EncoderConfig
 from modules.variance_predictor import VariancePredictor, VariancePredictorConfig
