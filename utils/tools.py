@@ -1,8 +1,8 @@
-from typing import overload, List, Tuple, Any
+from typing import overload, List, Tuple, Any, Literal
 
 import numpy as np
 import torch
-from torch import Tensor, device as TorchDevice, LongTensor
+from torch import nn, Tensor, device as TorchDevice, LongTensor
 
 from dataset import ReProcessedItem, ReProcessedTextItem
 
@@ -88,3 +88,22 @@ def to_device(data: Any, device: TorchDevice):
         accents = torch.from_numpy(accents).long().to(device)
 
         return ids, speakers, phonemes, phoneme_lens, max_phoneme_len, accents
+
+
+ActivationType = Literal["hardtanh", "tanh", "relu", "selu", "swish"]
+
+
+def get_activation(act: ActivationType) -> nn.Module:
+    """Return activation function."""
+    # Lazy load to avoid unused import
+    from modules.conformer.swish import Swish
+
+    activation_funcs = {
+        "hardtanh": nn.Hardtanh,
+        "tanh": nn.Tanh,
+        "relu": nn.ReLU,
+        "selu": nn.SELU,
+        "swish": Swish,
+    }
+
+    return activation_funcs[act]()
