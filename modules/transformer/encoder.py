@@ -32,6 +32,7 @@ class EncoderConfig(TypedDict):
     pos_enc_layer_type: PosEncLayerTypeLiteral
     self_attn_layer_type: PosEncLayerTypeLiteral
     activation_type: ActivationType
+    cnn_module_kernel: Optional[int]
 
 
 class Encoder(nn.Module):
