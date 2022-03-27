@@ -51,7 +51,7 @@ class EncoderLayer(nn.Module):
         size: int,
         self_attn: Union[MultiHeadedAttention, RelPositionMultiHeadedAttention],
         feed_forward: Union[PositionwiseFeedForward, Conv1dLinear, MultiLayeredConv1d],
-        feed_forward_macaron: Optional[PositionwiseFeedForward, Conv1dLinear, MultiLayeredConv1d],
+        feed_forward_macaron: Optional[Union[PositionwiseFeedForward, Conv1dLinear, MultiLayeredConv1d]],
         conv_module: Optional[ConvolutionModule],
         dropout_rate: float,
         normalize_before: bool = True,
