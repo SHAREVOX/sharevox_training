@@ -16,6 +16,7 @@ preprocess:
     mel_fmax: 8000
 
 model:
+  encoder_type: "transformer"
   encoder:
     hidden: 256
     heads: 2
@@ -28,6 +29,7 @@ model:
     pos_enc_layer_type: "abs_pos"
     self_attn_layer_type: "selfattn"
     activation_type: "relu"
+  decoder_type: "conformer"
   decoder:
     hidden: 256
     heads: 2
