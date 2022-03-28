@@ -93,9 +93,9 @@ if __name__ == '__main__':
     decoder_model.eval()
     decoder_model.requires_grad_ = False
 
-    phonemes = torch.from_numpy(np.array([[phoneme_to_id[p] for p in "k o N n i ch i w a".split(" ")]])).to(dtype=torch.int, device=device)
-    accents = torch.from_numpy(np.array([[accent_to_id[a] for a in "_ [ _ _ _ _ _ _ #".split(" ")]])).to(dtype=torch.int, device=device)
-    speakers = torch.from_numpy(np.array([0])).to(dtype=torch.int, device=device)
+    phonemes = torch.from_numpy(np.array([[phoneme_to_id[p] for p in "k o N n i ch i w a".split(" ")]])).to(dtype=torch.int64, device=device)
+    accents = torch.from_numpy(np.array([[accent_to_id[a] for a in "_ [ _ _ _ _ _ _ #".split(" ")]])).to(dtype=torch.int64, device=device)
+    speakers = torch.from_numpy(np.array([0])).to(dtype=torch.int64, device=device)
     torch.onnx.export(
         variance_model,
         (
