@@ -104,10 +104,10 @@ class PitchAndDurationPredictor(BaseModule):
         else:
             d_masks = make_pad_mask(phoneme_lens).to(x.device)
 
-        log_pitches: Tensor = self.pitch_predictor(hs, d_masks.unsqueeze(-1))
+        pitches: Tensor = self.pitch_predictor(hs, d_masks.unsqueeze(-1))
         log_durations: Tensor = self.duration_predictor(hs, d_masks.unsqueeze(-1))
 
-        return log_pitches, log_durations
+        return pitches, log_durations
 
 
 class FeatureEmbedder(BaseModule):

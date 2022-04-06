@@ -66,7 +66,7 @@ def evaluate(
                 durations,
             ) = batch
             with torch.no_grad():
-                log_pitch_outputs, log_duration_outputs = variance_model(
+                pitch_outputs, log_duration_outputs = variance_model(
                     phonemes=phonemes,
                     accents=accents,
                     speakers=speakers,
@@ -94,7 +94,7 @@ def evaluate(
                     outputs=outputs,
                     postnet_outputs=postnet_outputs,
                     log_duration_outputs=log_duration_outputs,
-                    log_pitch_outputs=log_pitch_outputs,
+                    pitch_outputs=pitch_outputs,
                     mel_targets=mels,
                     duration_targets=durations,
                     pitch_targets=pitches,
@@ -227,7 +227,7 @@ def main(restore_step: int, speaker_num, config: Config):
                 ) = batch
 
                 # Forward
-                log_pitch_outputs, log_duration_outputs = variance_model(
+                pitch_outputs, log_duration_outputs = variance_model(
                     phonemes=phonemes,
                     accents=accents,
                     speakers=speakers,
@@ -255,7 +255,7 @@ def main(restore_step: int, speaker_num, config: Config):
                     outputs=outputs,
                     postnet_outputs=postnet_outputs,
                     log_duration_outputs=log_duration_outputs,
-                    log_pitch_outputs=log_pitch_outputs,
+                    pitch_outputs=pitch_outputs,
                     mel_targets=mels,
                     duration_targets=durations,
                     pitch_targets=pitches,
