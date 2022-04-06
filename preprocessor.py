@@ -9,6 +9,7 @@ from text import accent_to_id
 
 import tgt
 from scipy.io.wavfile import read as load_wav
+from sklearn.preprocessing import StandardScaler
 from librosa.util import normalize
 import numpy as np
 import pyworld as pw
@@ -79,6 +80,7 @@ class Preprocessor:
         print("Processing Data ...")
         out: List[str] = []
         n_frames = 0
+        pitch_scaler = StandardScaler()
 
         # Compute pitch, energy, duration, and mel-spectrogram
         speakers = {}
@@ -100,6 +102,10 @@ class Preprocessor:
                     out.append(info)
                 else:
                     raise Exception("TextGrid not found")
+
+                if len(pitch) > 0:
+                    pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
+
                 n_frames += n
 
             # accent
@@ -115,9 +121,28 @@ class Preprocessor:
                 accent_filename = f"{speaker}-accent-{basename}.npy"
                 np.save(os.path.join(self.out_dir, "accent", accent_filename), accent_seq)
 
+        print("Computing statistic quantities ...")
+        pitch_mean = pitch_scaler.mean_[0]
+        pitch_std = pitch_scaler.scale_[0]
+
+        pitch_min, pitch_max = self.normalize(
+            os.path.join(self.out_dir, "pitch"), pitch_mean, pitch_std
+        )
+
         # Save files
         with open(os.path.join(self.out_dir, "speakers.json"), "w") as f:
             f.write(json.dumps(speakers))
+
+        with open(os.path.join(self.out_dir, "stats.json"), "w") as f:
+            stats = {
+                "pitch": [
+                    float(pitch_min),
+                    float(pitch_max),
+                    float(pitch_mean),
+                    float(pitch_std),
+                ],
+            }
+            f.write(json.dumps(stats))
 
         print(
             "Total time: {} hours".format(
@@ -264,6 +289,19 @@ class Preprocessor:
         normal_indices = np.logical_and(values > lower, values < upper)
 
         return values[normal_indices]
+
+    def normalize(self, in_dir: str, mean: float, std: float) -> Tuple[np.generic, np.generic]:
+        max_value = np.finfo(np.float64).min
+        min_value = np.finfo(np.float64).max
+        for filename in tqdm(os.listdir(in_dir), desc="Normalizing"):
+            filename = os.path.join(in_dir, filename)
+            values = (np.load(filename) - mean) / std
+            np.save(filename, values)
+
+            max_value = max(max_value, max(values))
+            min_value = min(min_value, min(values))
+
+        return min_value, max_value
 
 
 if __name__ == "__main__":

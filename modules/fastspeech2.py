@@ -15,6 +15,8 @@ from utils.mask import make_non_pad_mask, make_pad_mask
 class VarianceEmbedding(TypedDict):
     kernel_size: int
     dropout: float
+    pitch_embedding_type: Literal["normal", "fastpitch"]
+    n_bins: Optional[int]
 
 
 class ModelConfig(TypedDict):
@@ -109,7 +111,7 @@ class PitchAndDurationPredictor(BaseModule):
 
 
 class FeatureEmbedder(BaseModule):
-    def __init__(self, model_config: ModelConfig, speaker_num: int):
+    def __init__(self, model_config: ModelConfig, speaker_num: int, pitch_min: float, pitch_max: float):
         super(FeatureEmbedder, self).__init__()
 
         kernel_size = model_config["variance_embedding"]["kernel_size"]
@@ -127,16 +129,27 @@ class FeatureEmbedder(BaseModule):
             embedding_dim=hidden,
         )
 
-        # NOTE(from ESPNet): use continuous pitch + FastPitch style avg
-        self.pitch_embedding = torch.nn.Sequential(
-            torch.nn.Conv1d(
-                in_channels=1,
-                out_channels=hidden,
-                kernel_size=kernel_size,
-                padding=(kernel_size - 1) // 2,
-            ),
-            torch.nn.Dropout(dropout),
-        )
+        if model_config["variance_embedding"]["pitch_embedding_type"] == "normal":
+            assert model_config["variance_embedding"]["n_bins"], "please specify n_bins"
+            n_bins: int = model_config["variance_embedding"]["n_bins"]
+            self.pitch_embedding = nn.Embedding(
+                n_bins, hidden
+            )
+            self.pitch_bins = nn.Parameter(
+                torch.linspace(pitch_min, pitch_max, n_bins - 1),
+                requires_grad=False,
+            )
+        else:
+            # fastpitch style
+            self.pitch_embedding = torch.nn.Sequential(
+                torch.nn.Conv1d(
+                    in_channels=1,
+                    out_channels=hidden,
+                    kernel_size=kernel_size,
+                    padding=(kernel_size - 1) // 2,
+                ),
+                torch.nn.Dropout(dropout),
+            )
 
         encoder_type = model_config["encoder_type"]
         if encoder_type == "conformer":

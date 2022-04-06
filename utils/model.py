@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Optional, Union, Tuple, TypedDict, overload
 
@@ -46,8 +47,11 @@ def get_model(
     speaker_num: int,
     train: bool = False,
 ):
+    preprocessed_path = config["preprocess"]["path"]["preprocessed_path"]
+    stats_json = json.loads(os.path.join(preprocessed_path, "stats.json"))
+    pitch_min, pitch_max = stats_json["pitch"][:2]
     variance_model = PitchAndDurationPredictor(config["model"], speaker_num).to(device)
-    embedder_model = FeatureEmbedder(config["model"], speaker_num).to(device)
+    embedder_model = FeatureEmbedder(config["model"], speaker_num, pitch_min, pitch_max).to(device)
     decoder_model = MelSpectrogramDecoder(config["model"]).to(device)
     if restore_step:
         ckpt_path = os.path.join(
