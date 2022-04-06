@@ -68,8 +68,7 @@ class Decoder(nn.Module):
 
     def forward(self, length_regulated_tensor: Tensor) -> Tensor:
         _, postnet_outputs = self.decoder(length_regulated_tensor)
-        wavs = self.fregan(postnet_outputs[0].transpose(0, 1).unsqueeze(0)).squeeze(1) * self.max_wav_value
-        wavs = wavs.to(torch.int16)
+        wavs = self.fregan(postnet_outputs[0].transpose(0, 1).unsqueeze(0)).squeeze(1)
         return wavs
 
 
