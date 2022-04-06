@@ -12,9 +12,9 @@ from modules.fastspeech2 import MelSpectrogramDecoder, PitchAndDurationPredictor
 from text import phoneme_to_id, accent_to_id
 from utils.model import Config, get_model, get_vocoder
 
-from torch.onnx.symbolic_registry import _onnx_main_opset
+from torch.onnx.symbolic_registry import _onnx_stable_opsets
 
-OPSET = _onnx_main_opset
+OPSET = _onnx_stable_opsets[-1]
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
