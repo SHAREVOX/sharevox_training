@@ -129,7 +129,8 @@ class FeatureEmbedder(BaseModule):
             embedding_dim=hidden,
         )
 
-        if model_config["variance_embedding"]["pitch_embedding_type"] == "normal":
+        self.pitch_embedding_type = model_config["variance_embedding"]["pitch_embedding_type"]
+        if self.pitch_embedding_type == "normal":
             assert model_config["variance_embedding"]["n_bins"], "please specify n_bins"
             n_bins: int = model_config["variance_embedding"]["n_bins"]
             self.pitch_embedding = nn.Embedding(
@@ -158,6 +159,14 @@ class FeatureEmbedder(BaseModule):
             self.encoder = TransformerEncoder(model_config["encoder"])
         else:
             raise ValueError("unknown encoder: " + encoder_type)
+
+    @staticmethod
+    def bucketize(tensor: Tensor, bucket_boundaries: Tensor) -> LongTensor:
+        """for onnx, https://github.com/ming024/FastSpeech2/issues/98#issuecomment-952490935"""
+        result = torch.zeros_like(tensor, dtype=torch.int32)
+        for boundary in bucket_boundaries:
+            result += (tensor > boundary).int()
+        return result.long()
 
     def forward(
         self,
@@ -196,7 +205,12 @@ class FeatureEmbedder(BaseModule):
                 -1, max_phoneme_len, -1
             )
 
-        pitch_embeds = self.pitch_embedding(pitches.unsqueeze(1)).transpose(1, 2)
+        if self.pitch_embedding_type == "normal":
+            pitch_embeds = self.pitch_embedding(self.bucketize(pitches, self.pitch_bins))
+        else:
+            # fastpitch style
+            pitch_embeds = self.pitch_embedding(pitches.unsqueeze(1)).transpose(1, 2)
+
         feature_embeded += pitch_embeds
         return feature_embeded
 
