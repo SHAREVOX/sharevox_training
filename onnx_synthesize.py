@@ -45,9 +45,9 @@ if __name__ == "__main__":
     accents = None
     phonemes, accents = [np.array([out]).astype(dtype=np.int64) for out in preprocess_japanese(args.text)]
 
-    variance_session = onnxruntime.InferenceSession("variance_model.onnx", providers=['CUDAExecutionProvider'])
-    embedder_session = onnxruntime.InferenceSession("embedder_model.onnx", providers=['CUDAExecutionProvider'])
-    decoder_session = onnxruntime.InferenceSession("decoder_model.onnx", providers=['CUDAExecutionProvider'])
+    variance_session = onnxruntime.InferenceSession("variance_model.onnx", providers=['CPUExecutionProvider'])
+    embedder_session = onnxruntime.InferenceSession("embedder_model.onnx", providers=['CPUExecutionProvider'])
+    decoder_session = onnxruntime.InferenceSession("decoder_model.onnx", providers=['CPUExecutionProvider'])
 
     pitches, durations = variance_session.run(["pitches", "durations"], {
         "phonemes": phonemes,
