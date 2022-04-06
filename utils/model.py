@@ -48,7 +48,9 @@ def get_model(
     train: bool = False,
 ):
     preprocessed_path = config["preprocess"]["path"]["preprocessed_path"]
-    stats_json = json.loads(os.path.join(preprocessed_path, "stats.json"))
+    with open(os.path.join(preprocessed_path, "stats.json")) as f:
+        stats_text = f.read()
+    stats_json = json.loads(stats_text)
     pitch_min, pitch_max = stats_json["pitch"][:2]
     variance_model = PitchAndDurationPredictor(config["model"], speaker_num).to(device)
     embedder_model = FeatureEmbedder(config["model"], speaker_num, pitch_min, pitch_max).to(device)
