@@ -53,7 +53,6 @@ class Embedder(nn.Module):
         pitches: Tensor,
         speakers: Tensor,
     ):
-        pitches = torch.exp(pitches)
         feature_embedded = self.embedder_model(phonemes, pitches, speakers)
         return feature_embedded
 
