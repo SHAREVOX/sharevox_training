@@ -82,7 +82,7 @@ class Decoder(nn.Module):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--restore_step", type=int, default=0)
-    parser.add_argument("--speaker_num", type=int, default=1)
+    parser.add_argument("--speaker_num", type=int, default=10)
     parser.add_argument(
         "-c", "--config", type=str, required=True, help="path to config yaml"
     )
