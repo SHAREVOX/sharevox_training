@@ -1,13 +1,13 @@
 import json
 import os
-from typing import Optional, Union, Tuple, TypedDict, overload
+from typing import Optional, Union, Tuple, TypedDict, Literal, overload
 
 import torch
 from torch import nn, device as TorchDevice
 
-import fregan
 from dataset import TrainConfig
-from modules.fastspeech2 import PitchAndDurationPredictor, MelSpectrogramDecoder, ModelConfig, FeatureEmbedder
+from modules.fastspeech2 import PitchAndDurationPredictor, MelSpectrogramDecoder, ModelConfig, FeatureEmbedder, \
+    VocoderType
 from modules.optimizer import ScheduledOptim
 from preprocessor import PreProcessConfig
 
@@ -90,12 +90,35 @@ def get_param_num(model: nn.DataParallel) -> int:
     return num_param
 
 
-def get_vocoder(device: TorchDevice):
-    config = fregan.Config()
-    vocoder = fregan.Generator(config)
-    ckpt = torch.load(f"fregan/generator_universal.pth.tar", map_location=device)
-    vocoder.load_state_dict(ckpt["generator"])
-    vocoder.eval()
-    vocoder.remove_weight_norm()
+def get_vocoder(device: TorchDevice, type: VocoderType = "fregan"):
+    if type == "fregan":
+        import fregan
+        config = fregan.Config()
+        vocoder = fregan.Generator(config)
+        ckpt = torch.load(f"fregan/g_0003000.pth.tar", map_location=device)
+        vocoder.load_state_dict(ckpt["generator"])
+        vocoder.eval()
+        vocoder.remove_weight_norm()
+    elif type == "hifigan":
+        import hifigan
+        config = hifigan.Config()
+        vocoder = hifigan.Generator(config)
+        ckpt = torch.load(f"hifigan/g_00445000")
+        vocoder.load_state_dict(ckpt["generator"])
+        vocoder.eval()
+        vocoder.remove_weight_norm()
+    elif type == "melgan":
+        import mb_melgan
+        config = mb_melgan.Config()
+        vocoder = mb_melgan.Generator(
+            config.n_mel_channels, config.n_residual_layers,
+            ratios=config.generator_ratio, mult=config.mult,
+            out_band=config.out_channels
+        )
+        ckpt = torch.load("mb_melgan/g_31575.pt", map_location=device)
+        vocoder.load_state_dict(ckpt["model_g"])
+        vocoder.eval(inference=True)
+    else:
+        raise Exception(f"Unsupported vocoder: {type}")
     vocoder.to(device)
     return vocoder

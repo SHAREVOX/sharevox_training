@@ -19,6 +19,9 @@ class VarianceEmbedding(TypedDict):
     n_bins: Optional[int]
 
 
+VocoderType = Literal["fregan", "melgan"]
+
+
 class ModelConfig(TypedDict):
     encoder_type: Literal["transformer", "conformer"]
     encoder: EncoderConfig
@@ -26,6 +29,7 @@ class ModelConfig(TypedDict):
     decoder: EncoderConfig
     variance_predictor: VariancePredictorConfig
     variance_embedding: VarianceEmbedding
+    vocoder_type: VocoderType
 
 
 class BaseModule(nn.Module):
