@@ -77,7 +77,7 @@ def get_model(
         return variance_model, embedder_model, decoder_model, scheduled_optim
 
     variance_model.eval()
-    embedder_model.train()
+    embedder_model.eval()
     decoder_model.eval()
     variance_model.requires_grad_ = False
     embedder_model.requires_grad_ = False
