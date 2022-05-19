@@ -1,5 +1,7 @@
 import argparse
-from typing import Optional
+import json
+import os
+from typing import List
 
 import numpy as np
 import torch
@@ -21,12 +23,14 @@ device = torch.device("cpu")
 
 
 class Variance(nn.Module):
-    def __init__(self, config: Config, variance_model: PitchAndDurationPredictor):
+    def __init__(self, config: Config, variance_model: PitchAndDurationPredictor, pitch_mean: float, pitch_std: float):
         super(Variance, self).__init__()
 
         self.sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
         self.hop_length = config["preprocess"]["stft"]["hop_length"]
         self.variance_model = variance_model
+        self.pitch_mean = pitch_mean
+        self.pitch_std = pitch_std
 
     def forward(
         self,
@@ -35,17 +39,20 @@ class Variance(nn.Module):
         speakers: Tensor,
     ):
         pitches, log_durations = self.variance_model(phonemes, accents, speakers)
+        pitches = torch.log(pitches * self.pitch_std + self.pitch_mean)
         durations = torch.clamp((torch.exp(log_durations) - 1) / (self.sampling_rate / self.hop_length), min=0.01)
         return pitches, durations
 
 
 class Embedder(nn.Module):
-    def __init__(self, config: Config, embedder_model: FeatureEmbedder):
+    def __init__(self, config: Config, embedder_model: FeatureEmbedder, pitch_mean: float, pitch_std: float):
         super(Embedder, self).__init__()
 
         self.sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
         self.hop_length = config["preprocess"]["stft"]["hop_length"]
         self.embedder_model = embedder_model
+        self.pitch_mean = pitch_mean
+        self.pitch_std = pitch_std
 
     def forward(
         self,
@@ -53,6 +60,7 @@ class Embedder(nn.Module):
         pitches: Tensor,
         speakers: Tensor,
     ):
+        pitches = (torch.exp(pitches) - self.pitch_mean) / self.pitch_std
         feature_embedded = self.embedder_model(phonemes, pitches, speakers)
         return feature_embedded
 
@@ -84,9 +92,15 @@ if __name__ == '__main__':
     )
 
     variance_model, embedder_model, decoder_model, _ = get_model(args.restore_step, config, device, args.speaker_num, False)
-    fregan_model = get_vocoder(device)
-    variance_model = Variance(config, variance_model)
-    embedder_model = Embedder(config, embedder_model)
+    fregan_model = get_vocoder(device, config["model"]["vocoder_type"])
+    with open(
+        os.path.join(config["preprocess"]["path"]["preprocessed_path"], "stats.json")
+    ) as f:
+        stats = json.load(f)
+        pitch_data: List[float] = stats["pitch"]
+        pitch_mean, pitch_std = pitch_data[2], pitch_data[3]
+    variance_model = Variance(config, variance_model, pitch_mean, pitch_std)
+    embedder_model = Embedder(config, embedder_model, pitch_mean, pitch_std)
     decoder_model = Decoder(config, decoder_model, fregan_model)
     decoder_model.eval()
     decoder_model.requires_grad_ = False
