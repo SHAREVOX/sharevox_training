@@ -68,4 +68,4 @@ if __name__ == "__main__":
         "length_regulated_tensor": length_regulated_tensor,
     })[0]
 
-    wavfile.write("test.wav", 48000, wav[0])
+    wavfile.write(f"{args.text}.wav", 48000, wav[0])
