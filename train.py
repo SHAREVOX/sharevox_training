@@ -366,11 +366,9 @@ def main(restore_step: int, speaker_num, config: Config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("config", type=str, help="path to config yaml")
     parser.add_argument("--restore_step", type=int, default=0)
-    parser.add_argument("--speaker_num", type=int, default=1)
-    parser.add_argument(
-        "-c", "--config", type=str, required=True, help="path to config yaml"
-    )
+    parser.add_argument("--speaker_num", type=int, default=10)
     args = parser.parse_args()
 
     config: Config = yaml.load(
