@@ -92,7 +92,7 @@ if __name__ == '__main__':
     )
 
     variance_model, embedder_model, decoder_model, _ = get_model(args.restore_step, config, device, args.speaker_num, False)
-    fregan_model = get_vocoder(device, config["model"]["vocoder_type"])
+    fregan_model = get_vocoder(device)
     with open(
         os.path.join(config["preprocess"]["path"]["preprocessed_path"], "stats.json")
     ) as f:
