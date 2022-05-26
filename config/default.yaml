@@ -57,6 +57,7 @@ train:
     ckpt_path: "./output/ckpt/JSUT"
     log_path: "./output/log/JSUT"
     result_path: "./output/result/JSUT"
+    tf_data_path: "./output/tf_data/JSUT"
   optimizer:
     batch_size: 16
     betas: [ 0.9, 0.98 ]
