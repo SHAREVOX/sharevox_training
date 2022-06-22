@@ -7,6 +7,7 @@ from matplotlib import pyplot as plt
 from torch import Tensor, LongTensor
 
 import fregan
+from modules.fastspeech2 import VocoderGenerator
 from utils.model import Config
 from utils.plot import plot_mel
 
@@ -20,13 +21,16 @@ def expand(values: np.ndarray, durations: np.ndarray) -> np.ndarray:
 
 def vocoder_infer(
     mels: torch.Tensor,
-    vocoder: fregan.Generator,
+    vocoder: VocoderGenerator,
     config: Config,
     lengths: Optional[int] = None
 ) -> List[np.ndarray]:
     with torch.no_grad():
         start = time.time()
-        wavs = vocoder(mels).squeeze(1)
+        if config["model"]["vocoder_type"] != "melgan":
+            wavs = vocoder.inference(mels[0]).unsqueeze(0)
+        else:
+            wavs = vocoder(mels).squeeze(1)
         print("RTF:", f"{time.time() - start}s")
 
     wavs = (

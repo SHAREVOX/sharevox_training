@@ -7,7 +7,7 @@ from torch import nn, device as TorchDevice
 
 from dataset import TrainConfig
 from modules.fastspeech2 import PitchAndDurationPredictor, MelSpectrogramDecoder, ModelConfig, FeatureEmbedder, \
-    VocoderType
+    VocoderType, VocoderGenerator
 from modules.optimizer import ScheduledOptim
 from preprocessor import PreProcessConfig
 
@@ -90,7 +90,7 @@ def get_param_num(model: nn.DataParallel) -> int:
     return num_param
 
 
-def get_vocoder(device: TorchDevice, type: VocoderType = "fregan"):
+def get_vocoder(device: TorchDevice, type: VocoderType = "fregan") -> VocoderGenerator:
     if type == "fregan":
         import fregan
         config = fregan.Config()

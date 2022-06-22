@@ -2,8 +2,11 @@ import torch
 
 from torch import nn, Tensor, LongTensor
 
-from typing import TypedDict, Literal, Optional
+from typing import TypedDict, Literal, Optional, Union
 
+import fregan
+import hifigan
+import mb_melgan
 from modules.tacotron2.decoder import Postnet
 from modules.conformer.encoder import Encoder as ConformerEncoder
 from modules.transformer.encoder import Encoder as TransformerEncoder, EncoderConfig
@@ -20,6 +23,7 @@ class VarianceEmbedding(TypedDict):
 
 
 VocoderType = Literal["fregan", "hifigan", "melgan"]
+VocoderGenerator = Union[fregan.Generator, hifigan.Generator, mb_melgan.Generator]
 
 
 class ModelConfig(TypedDict):
