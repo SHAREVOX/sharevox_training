@@ -19,7 +19,7 @@ class VarianceEmbedding(TypedDict):
     n_bins: Optional[int]
 
 
-VocoderType = Literal["fregan", "melgan"]
+VocoderType = Literal["fregan", "hifigan", "melgan"]
 
 
 class ModelConfig(TypedDict):
