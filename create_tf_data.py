@@ -1,15 +1,18 @@
 import argparse
+import json
 import os
 
 import numpy as np
 import torch
 import yaml
+from scipy.io import wavfile
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dataset import Dataset
 from modules.length_regulator import LengthRegulator
+from preprocessor import get_tgt_and_wav
 from utils.model import Config, get_model
 from utils.tools import to_device, ReProcessedItemTorch
 
@@ -26,7 +29,7 @@ def main(restore_step: int, speaker_num, config: Config):
     dataset = Dataset(
         "train.txt", config["preprocess"], config["train"], sort=False, drop_last=False
     )
-    batch_size = config["train"]["optimizer"]["batch_size"]
+    batch_size = 1
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -35,6 +38,11 @@ def main(restore_step: int, speaker_num, config: Config):
     )
 
     tf_data_path = config["train"]["path"]["tf_data_path"]
+    out_dir = config["preprocess"]["path"]["preprocessed_path"]
+    with open(os.path.join(out_dir, "speakers.json")) as f:
+        speakers_data = json.load(f)
+    os.makedirs(os.path.join(tf_data_path, "wav"), exist_ok=True)
+    os.makedirs(os.path.join(tf_data_path, "mel"), exist_ok=True)
     inner_bar = tqdm(total=len(dataset), desc="Creating TF Data...")
     for batchs in loader:
         for batch in batchs:
@@ -69,8 +77,17 @@ def main(restore_step: int, speaker_num, config: Config):
                     mel_lens=mel_lens,
                 )
             for i, id in enumerate(ids):
-                filename = f"{id}.npy"
-                np.save(os.path.join(tf_data_path, filename), postnet_outputs[i].cpu().numpy())
+                speaker = None
+                for k, v in speakers_data.items():
+                    if v == int(speakers[i]):
+                        speaker = k
+                        break
+                filename = speaker + "_" + id
+                wav_filepath = os.path.join(tf_data_path, "wav", f"{filename}.wav")
+                mel_filepath = os.path.join(tf_data_path, "mel", f"{filename}.npy")
+                _, _, cut_wav = get_tgt_and_wav(config["preprocess"], speaker, id)
+                wavfile.write(wav_filepath, config["preprocess"]["audio"]["sampling_rate"], cut_wav)
+                np.save(mel_filepath, postnet_outputs[i].cpu().numpy().T)
                 inner_bar.update(1)
 
 

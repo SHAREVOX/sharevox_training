@@ -50,6 +50,80 @@ class PreProcessConfig(TypedDict):
     mel: PreProcessMel
 
 
+def get_alignment(config: PreProcessConfig, tier: tgt.IntervalTier) -> Tuple[List[str], List[int], float, float]:
+    sil_phones = ["sil", "sp", "spn"]
+    sampling_rate = config["audio"]["sampling_rate"]
+    hop_length = config["stft"]["hop_length"]
+
+    phones = []
+    durations = []
+    start_time = 0.
+    end_time = 0.
+    end_idx = 0
+    for t in tier._objects:
+        s, e, p = t.start_time, t.end_time, t.text
+
+        # Trim leading silences
+        if phones == []:
+            if p in sil_phones:
+                continue
+            else:
+                start_time = s
+
+        if p not in sil_phones:
+            # For ordinary phones
+            phones.append(p)
+            end_time = e
+            end_idx = len(phones)
+        else:
+            # For silent phones
+            phones.append(p)
+
+        durations.append(
+            int(
+                np.round(e * sampling_rate / hop_length)
+                - np.round(s * sampling_rate / hop_length)
+            )
+        )
+
+    # Trim tailing silences
+    phones = phones[:end_idx]
+    durations = durations[:end_idx]
+
+    return phones, durations, start_time, end_time
+
+
+def get_tgt_and_wav(config: PreProcessConfig, speaker: str, basename: str) -> Tuple[str, List[int], np.ndarray]:
+    in_dir = config["path"]["data_path"]
+    out_dir = config["path"]["preprocessed_path"]
+    max_wav_value = config["audio"]["max_wav_value"]
+    sampling_rate = config["audio"]["sampling_rate"]
+
+    wav_path = os.path.join(in_dir, speaker, "{}.wav".format(basename))
+    tg_path = os.path.join(
+        out_dir, "TextGrid", speaker, "{}.TextGrid".format(basename)
+    )
+
+    # Get alignments
+    textgrid = tgt.io.read_textgrid(tg_path)
+    phones_tier = textgrid.get_tier_by_name("phoneme")
+    phone, duration, start, end = get_alignment(config, phones_tier)
+    text = " ".join(phone)
+    if start >= end:
+        raise RuntimeError()
+
+    # Read and trim wav files
+    data: Tuple[int, np.ndarray] = load_wav(wav_path)
+    sr, wav = data
+    wav = wav / max_wav_value
+    wav = normalize(wav) * 0.95
+    wav = wav[
+        int(sampling_rate * start): int(sampling_rate * end)
+    ].astype(np.float32)
+
+    return text, duration, wav
+
+
 class Preprocessor:
     def __init__(self, config: PreProcessConfig):
         self.config = config
@@ -164,27 +238,7 @@ class Preprocessor:
         return out
 
     def process_utterance(self, speaker: str, basename: str) -> Tuple[str, np.ndarray, np.ndarray]:
-        wav_path = os.path.join(self.in_dir, speaker, "{}.wav".format(basename))
-        tg_path = os.path.join(
-            self.out_dir, "TextGrid", speaker, "{}.TextGrid".format(basename)
-        )
-
-        # Get alignments
-        textgrid = tgt.io.read_textgrid(tg_path)
-        phones_tier = textgrid.get_tier_by_name("phoneme")
-        phone, duration, start, end = self.get_alignment(phones_tier)
-        text = " ".join(phone)
-        if start >= end:
-            raise RuntimeError()
-
-        # Read and trim wav files
-        data: Tuple[int, np.ndarray] = load_wav(wav_path)
-        sr, wav = data
-        wav = wav / self.max_wav_value
-        wav = normalize(wav) * 0.95
-        wav = wav[
-            int(self.sampling_rate * start) : int(self.sampling_rate * end)
-        ].astype(np.float32)
+        text, duration, wav = get_tgt_and_wav(self.config, speaker, basename)
 
         # Compute fundamental frequency
         pitch, t = pw.dio(
@@ -239,46 +293,6 @@ class Preprocessor:
             self.remove_outlier(pitch),
             mel_spectrogram.shape[1],
         )
-
-    def get_alignment(self, tier: tgt.IntervalTier) -> Tuple[List[str], List[int], float, float]:
-        sil_phones = ["sil", "sp", "spn"]
-
-        phones = []
-        durations = []
-        start_time = 0.
-        end_time = 0.
-        end_idx = 0
-        for t in tier._objects:
-            s, e, p = t.start_time, t.end_time, t.text
-
-            # Trim leading silences
-            if phones == []:
-                if p in sil_phones:
-                    continue
-                else:
-                    start_time = s
-
-            if p not in sil_phones:
-                # For ordinary phones
-                phones.append(p)
-                end_time = e
-                end_idx = len(phones)
-            else:
-                # For silent phones
-                phones.append(p)
-
-            durations.append(
-                int(
-                    np.round(e * self.sampling_rate / self.hop_length)
-                    - np.round(s * self.sampling_rate / self.hop_length)
-                )
-            )
-
-        # Trim tailing silences
-        phones = phones[:end_idx]
-        durations = durations[:end_idx]
-
-        return phones, durations, start_time, end_time
 
     def remove_outlier(self, values: np.ndarray) -> np.ndarray:
         values = np.array(values)
