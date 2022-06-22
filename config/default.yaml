@@ -51,6 +51,7 @@ model:
     dropout: 0.1
     pitch_embedding_type: "fastpitch"
     # n_bins: 256
+  vocoder_type: "hifigan"
 
 train:
   path:

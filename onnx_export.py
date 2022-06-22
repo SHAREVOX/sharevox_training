@@ -10,7 +10,7 @@ import yaml
 from torch import nn, Tensor, LongTensor
 
 from fregan import Generator
-from modules.fastspeech2 import MelSpectrogramDecoder, PitchAndDurationPredictor, FeatureEmbedder
+from modules.fastspeech2 import MelSpectrogramDecoder, PitchAndDurationPredictor, FeatureEmbedder, VocoderGenerator
 from text import phoneme_to_id, accent_to_id
 from utils.model import Config, get_model, get_vocoder
 
@@ -66,16 +66,20 @@ class Embedder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, config: Config, decoder: MelSpectrogramDecoder, fregan: Generator):
+    def __init__(self, config: Config, decoder: MelSpectrogramDecoder, vocoder: VocoderGenerator):
         super(Decoder, self).__init__()
 
         self.max_wav_value = config["preprocess"]["audio"]["max_wav_value"]
         self.decoder = decoder
-        self.fregan = fregan
+        self.vocoder_type = config["model"]["vocoder_type"]
+        self.vocoder = vocoder
 
     def forward(self, length_regulated_tensor: Tensor) -> Tensor:
         _, postnet_outputs = self.decoder(length_regulated_tensor)
-        wavs = self.fregan(postnet_outputs[0].transpose(0, 1).unsqueeze(0)).squeeze(1)
+        if self.vocoder_type == "melgan":
+            wavs = self.vocoder.inference(postnet_outputs[0].transpose(0, 1).unsqueeze(0)).unsqueeze(0)
+        else:
+            wavs = self.vocoder(postnet_outputs[0].transpose(0, 1).unsqueeze(0)).squeeze(1)
         return wavs
 
 
@@ -92,7 +96,7 @@ if __name__ == '__main__':
     )
 
     variance_model, embedder_model, decoder_model, _ = get_model(args.restore_step, config, device, args.speaker_num, False)
-    fregan_model = get_vocoder(device)
+    fregan_model = get_vocoder(device, config["model"]["vocoder_type"])
     with open(
         os.path.join(config["preprocess"]["path"]["preprocessed_path"], "stats.json")
     ) as f:
