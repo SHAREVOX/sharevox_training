@@ -103,7 +103,7 @@ def get_vocoder(device: TorchDevice, type: VocoderType = "fregan"):
         import hifigan
         config = hifigan.Config()
         vocoder = hifigan.Generator(config)
-        ckpt = torch.load(f"hifigan/g_00445000")
+        ckpt = torch.load(f"hifigan/g_00445000", map_location=device)
         vocoder.load_state_dict(ckpt["generator"])
         vocoder.eval()
         vocoder.remove_weight_norm()
