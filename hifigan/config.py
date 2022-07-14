@@ -14,7 +14,7 @@ class Config:
 
         self.upsample_rates: List[int] = [8, 8, 2, 2]
         self.upsample_kernel_sizes: List[int] = [16, 16, 4, 4]
-        self.upsample_initial_channel: int = 256
+        self.upsample_initial_channel: int = 512
         self.resblock_kernel_sizes: List[int] = [3, 7, 11]
         self.resblock_dilation_sizes: List[List[int]] = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
 
