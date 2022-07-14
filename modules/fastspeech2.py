@@ -227,13 +227,13 @@ class MelSpectrogramDecoder(BaseModule):
     def __init__(self, model_config: ModelConfig):
         super(MelSpectrogramDecoder, self).__init__()
 
-        hidden = model_config["encoder"]["hidden"]
+        hidden = model_config["decoder"]["hidden"]
 
-        decoder_type = model_config["encoder_type"]
+        decoder_type = model_config["decoder_type"]
         if decoder_type == "conformer":
-            self.decoder = ConformerEncoder(model_config["encoder"])
+            self.decoder = ConformerEncoder(model_config["decoder"])
         elif decoder_type == "transformer":
-            self.decoder = TransformerEncoder(model_config["encoder"])
+            self.decoder = TransformerEncoder(model_config["decoder"])
         else:
             raise ValueError("unknown decoder: " + decoder_type)
 
