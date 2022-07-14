@@ -27,8 +27,10 @@ VocoderGenerator = Union[fregan.Generator, hifigan.Generator, mb_melgan.Generato
 
 
 class ModelConfig(TypedDict):
-    encoder_type: Literal["transformer", "conformer"]
-    encoder: EncoderConfig
+    variance_encoder_type: Literal["transformer", "conformer"]
+    variance_encoder: EncoderConfig
+    phoneme_encoder_type: Literal["transformer", "conformer"]
+    phoneme_encoder: EncoderConfig
     decoder_type: Literal["transformer", "conformer"]
     decoder: EncoderConfig
     variance_predictor: VariancePredictorConfig
@@ -48,7 +50,7 @@ class PitchAndDurationPredictor(BaseModule):
         super(PitchAndDurationPredictor, self).__init__()
 
         padding_idx = 0
-        hidden = model_config["encoder"]["hidden"]
+        hidden = model_config["variance_encoder"]["hidden"]
         self.phoneme_embedding = nn.Embedding(
             num_embeddings=len(phoneme_symbols),
             embedding_dim=hidden,
@@ -64,11 +66,11 @@ class PitchAndDurationPredictor(BaseModule):
             embedding_dim=hidden,
         )
 
-        encoder_type = model_config["encoder_type"]
+        encoder_type = model_config["variance_encoder_type"]
         if encoder_type == "conformer":
-            self.encoder = ConformerEncoder(model_config["encoder"])
+            self.encoder = ConformerEncoder(model_config["variance_encoder"])
         elif encoder_type == "transformer":
-            self.encoder = TransformerEncoder(model_config["encoder"])
+            self.encoder = TransformerEncoder(model_config["variance_encoder"])
         else:
             raise ValueError("unknown encoder: " + encoder_type)
 
@@ -126,7 +128,7 @@ class FeatureEmbedder(BaseModule):
         dropout = model_config["variance_embedding"]["dropout"]
 
         padding_idx = 0
-        hidden = model_config["encoder"]["hidden"]
+        hidden = model_config["phoneme_encoder"]["hidden"]
         self.phoneme_embedding = nn.Embedding(
             num_embeddings=len(phoneme_symbols),
             embedding_dim=hidden,
@@ -160,11 +162,11 @@ class FeatureEmbedder(BaseModule):
                 torch.nn.Dropout(dropout),
             )
 
-        encoder_type = model_config["encoder_type"]
+        encoder_type = model_config["phoneme_encoder_type"]
         if encoder_type == "conformer":
-            self.encoder = ConformerEncoder(model_config["encoder"])
+            self.encoder = ConformerEncoder(model_config["phoneme_encoder"])
         elif encoder_type == "transformer":
-            self.encoder = TransformerEncoder(model_config["encoder"])
+            self.encoder = TransformerEncoder(model_config["phoneme_encoder"])
         else:
             raise ValueError("unknown encoder: " + encoder_type)
 

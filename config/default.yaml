@@ -16,16 +16,29 @@ preprocess:
     mel_fmax: 8000
 
 model:
-  encoder_type: "transformer"
-  encoder:
-    hidden: 256
+  variance_encoder_type: "transformer"
+  variance_encoder:
+    hidden: 32
     heads: 2
-    layers: 4
+    layers: 2
     dropout_rate: 0.2
     normalize_before: True
     concat_after: True
     layer_type: "conv1d"
-    kernel_size: 9
+    kernel_size: 3
+    pos_enc_layer_type: "abs_pos"
+    self_attn_layer_type: "selfattn"
+    activation_type: "relu"
+  phoneme_encoder_type: "transformer"
+  phoneme_encoder:
+    hidden: 256
+    heads: 2
+    layers: 1
+    dropout_rate: 0.2
+    normalize_before: True
+    concat_after: True
+    layer_type: "conv1d"
+    kernel_size: 3
     pos_enc_layer_type: "abs_pos"
     self_attn_layer_type: "selfattn"
     activation_type: "relu"
@@ -33,14 +46,14 @@ model:
   decoder:
     hidden: 256
     heads: 2
-    layers: 6
+    layers: 5
     dropout_rate: 0.2
     normalize_before: True
     concat_after: True
     layer_type: "conv1d"
-    kernel_size: 9
-    pos_enc_layer_type: "abs_pos"
-    self_attn_layer_type: "selfattn"
+    kernel_size: 3
+    pos_enc_layer_type: "rel_pos"
+    self_attn_layer_type: "rel_selfattn"
     activation_type: "relu"
   variance_predictor:
     filter_size: 256
@@ -51,7 +64,7 @@ model:
     dropout: 0.1
     pitch_embedding_type: "fastpitch"
     # n_bins: 256
-  vocoder_type: "hifigan"
+  vocoder_type: "fregan"
 
 train:
   path:
