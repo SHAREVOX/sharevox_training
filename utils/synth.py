@@ -27,7 +27,7 @@ def vocoder_infer(
 ) -> List[np.ndarray]:
     with torch.no_grad():
         start = time.time()
-        if config["model"]["vocoder_type"] != "melgan":
+        if config["model"]["vocoder_type"] == "melgan":
             wavs = vocoder.inference(mels[0]).unsqueeze(0)
         else:
             wavs = vocoder(mels).squeeze(1)
