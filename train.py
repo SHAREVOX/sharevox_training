@@ -180,7 +180,7 @@ def main(restore_step: int, speaker_num, config: Config):
     print("Number of FastSpeech2 Parameters:", num_param)
 
     # Load vocoder
-    vocoder = get_vocoder(device)
+    vocoder = get_vocoder(device, config["model"]["vocoder_type"])
 
     # Init logger
     for p in config["train"]["path"].values():
