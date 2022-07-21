@@ -115,6 +115,7 @@ def get_tgt_and_wav(config: PreProcessConfig, speaker: str, basename: str) -> Tu
     # Read and trim wav files
     data: Tuple[int, np.ndarray] = load_wav(wav_path)
     sr, wav = data
+    assert sampling_rate == sr, f"sampling rate is invalid (required: {sampling_rate}, actually: {sr}, file: {wav_path})"
     wav = wav / max_wav_value
     wav = normalize(wav) * 0.95
     wav = wav[
