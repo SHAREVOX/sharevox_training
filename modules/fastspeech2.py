@@ -117,8 +117,8 @@ class PitchAndDurationPredictor(BaseModule):
         self,
         phonemes: Tensor,
         speakers: Tensor,
-        x,
-        x_masks,
+        x: Tensor,
+        x_masks: Tensor,
         phoneme_lens: Optional[LongTensor] = None,
         max_phoneme_len: Optional[LongTensor] = None,
     ):
