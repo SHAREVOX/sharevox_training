@@ -93,18 +93,23 @@ class PitchAndDurationPredictor(BaseModule):
         if phoneme_lens is None:
             x_masks = torch.ones_like(phonemes).squeeze()
         else:
-            x_masks = self.source_mask(phoneme_lens)  # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
+            # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
+            x_masks = self.source_mask(phoneme_lens)
 
         phoneme_embedding = self.phoneme_embedding(phonemes)
         accent_embedding = self.accent_embedding(accents)
 
         # predict pitches with a phoneme and an accent
-        pitches_args = self.__forward_preprocessing(phonemes,speakers, phoneme_embedding + accent_embedding, x_masks, phoneme_lens, max_phoneme_len)
-        pitches: Tensor = self.pitch_predictor(pitches_args.hs, pitches_args.d_masks.unsqueeze(-1))
+        pitches_args = self.__forward_preprocessing(
+            phonemes, speakers, phoneme_embedding + accent_embedding, x_masks, phoneme_lens, max_phoneme_len)
+        pitches: Tensor = self.pitch_predictor(
+            pitches_args.hs, pitches_args.d_masks.unsqueeze(-1))
 
         # predict log_durations with a phoneme
-        log_durations_args = self.__forward_preprocessing(phonemes,speakers, phoneme_embedding, x_masks, phoneme_lens, max_phoneme_len)
-        log_durations: Tensor = self.duration_predictor(log_durations_args.hs, log_durations_args.d_masks.unsqueeze(-1))
+        log_durations_args = self.__forward_preprocessing(
+            phonemes, speakers, phoneme_embedding, x_masks, phoneme_lens, max_phoneme_len)
+        log_durations: Tensor = self.duration_predictor(
+            log_durations_args.hs, log_durations_args.d_masks.unsqueeze(-1))
 
         return pitches, log_durations
 
@@ -130,7 +135,8 @@ class PitchAndDurationPredictor(BaseModule):
 
         # forward duration predictor and variance predictors
         if phoneme_lens is None:
-            d_masks = ~torch.ones_like(phonemes).to(device=x.device, dtype=torch.bool)
+            d_masks = ~torch.ones_like(phonemes).to(
+                device=x.device, dtype=torch.bool)
         else:
             d_masks = make_pad_mask(phoneme_lens).to(x.device)
 
