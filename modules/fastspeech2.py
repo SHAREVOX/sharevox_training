@@ -95,9 +95,29 @@ class PitchAndDurationPredictor(BaseModule):
         else:
             x_masks = self.source_mask(phoneme_lens)  # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
 
-        x = self.phoneme_embedding(phonemes) + self.accent_embedding(accents)
+        phoneme_embedding = self.phoneme_embedding(phonemes)
+        accent_embedding = self.accent_embedding(accents)
 
-        hs, _ = self.encoder(x, x_masks)  # (B, Tmax, adim) -> torch.Size([32, 121, 256])
+        # predict pitches with a phoneme and an accent
+        pitches_args = self.__forward_preprocessing(phonemes,speakers, phoneme_embedding + accent_embedding, x_masks, phoneme_lens, max_phoneme_len)
+        pitches: Tensor = self.pitch_predictor(pitches_args.hs, pitches_args.d_masks.unsqueeze(-1))
+
+        # predict log_durations with a phoneme
+        log_durations_args = self.__forward_preprocessing(phonemes,speakers, phoneme_embedding, x_masks, phoneme_lens, max_phoneme_len)
+        log_durations: Tensor = self.duration_predictor(log_durations_args.hs, log_durations_args.d_masks.unsqueeze(-1))
+
+        return pitches, log_durations
+
+    def __forward_preprocessing(
+        self,
+        phonemes: Tensor,
+        speakers: Tensor,
+        x,
+        x_masks,
+        phoneme_lens: Optional[LongTensor] = None,
+        max_phoneme_len: Optional[LongTensor] = None,
+    ):
+        hs, _ = self.encoder(x, x_masks)    # (B, Tmax, adim) -> torch.Size()
 
         if max_phoneme_len is None:
             hs = hs + self.speaker_embedding(speakers).unsqueeze(1).expand(
@@ -114,10 +134,7 @@ class PitchAndDurationPredictor(BaseModule):
         else:
             d_masks = make_pad_mask(phoneme_lens).to(x.device)
 
-        pitches: Tensor = self.pitch_predictor(hs, d_masks.unsqueeze(-1))
-        log_durations: Tensor = self.duration_predictor(hs, d_masks.unsqueeze(-1))
-
-        return pitches, log_durations
+        return hs, d_masks
 
 
 class FeatureEmbedder(BaseModule):
