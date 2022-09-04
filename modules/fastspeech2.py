@@ -93,11 +93,36 @@ class PitchAndDurationPredictor(BaseModule):
         if phoneme_lens is None:
             x_masks = torch.ones_like(phonemes).squeeze()
         else:
-            x_masks = self.source_mask(phoneme_lens)  # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
+            # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
+            x_masks = self.source_mask(phoneme_lens)
 
-        x = self.phoneme_embedding(phonemes) + self.accent_embedding(accents)
+        phoneme_embedding = self.phoneme_embedding(phonemes)
+        accent_embedding = self.accent_embedding(accents)
 
-        hs, _ = self.encoder(x, x_masks)  # (B, Tmax, adim) -> torch.Size([32, 121, 256])
+        # predict pitches with a phoneme and an accent
+        pitches_args = self.__forward_preprocessing(
+            phonemes, speakers, phoneme_embedding + accent_embedding, x_masks, phoneme_lens, max_phoneme_len)
+        pitches: Tensor = self.pitch_predictor(
+            pitches_args[0], pitches_args[1].unsqueeze(-1))
+
+        # predict log_durations with a phoneme
+        log_durations_args = self.__forward_preprocessing(
+            phonemes, speakers, phoneme_embedding, x_masks, phoneme_lens, max_phoneme_len)
+        log_durations: Tensor = self.duration_predictor(
+            log_durations_args[0], log_durations_args[1].unsqueeze(-1))
+
+        return pitches, log_durations
+
+    def __forward_preprocessing(
+        self,
+        phonemes: Tensor,
+        speakers: Tensor,
+        x: Tensor,
+        x_masks: Tensor,
+        phoneme_lens: Optional[LongTensor] = None,
+        max_phoneme_len: Optional[LongTensor] = None,
+    ):
+        hs, _ = self.encoder(x, x_masks)    # (B, Tmax, adim) -> torch.Size()
 
         if max_phoneme_len is None:
             hs = hs + self.speaker_embedding(speakers).unsqueeze(1).expand(
@@ -110,14 +135,12 @@ class PitchAndDurationPredictor(BaseModule):
 
         # forward duration predictor and variance predictors
         if phoneme_lens is None:
-            d_masks = ~torch.ones_like(phonemes).to(device=x.device, dtype=torch.bool)
+            d_masks = ~torch.ones_like(phonemes).to(
+                device=x.device, dtype=torch.bool)
         else:
             d_masks = make_pad_mask(phoneme_lens).to(x.device)
 
-        pitches: Tensor = self.pitch_predictor(hs, d_masks.unsqueeze(-1))
-        log_durations: Tensor = self.duration_predictor(hs, d_masks.unsqueeze(-1))
-
-        return pitches, log_durations
+        return hs, d_masks
 
 
 class FeatureEmbedder(BaseModule):
