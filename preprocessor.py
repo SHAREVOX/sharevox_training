@@ -22,6 +22,7 @@ from typing import Tuple, List, TypedDict
 
 class PreProcessPath(TypedDict):
     data_path: str
+    text_data_path: str
     preprocessed_path: str
 
 
@@ -93,24 +94,12 @@ def get_alignment(config: PreProcessConfig, tier: tgt.IntervalTier) -> Tuple[Lis
     return phones, durations, start_time, end_time
 
 
-def get_tgt_and_wav(config: PreProcessConfig, speaker: str, basename: str) -> Tuple[str, List[int], np.ndarray]:
+def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> np.ndarray:
     in_dir = config["path"]["data_path"]
-    out_dir = config["path"]["preprocessed_path"]
     max_wav_value = config["audio"]["max_wav_value"]
     sampling_rate = config["audio"]["sampling_rate"]
 
     wav_path = os.path.join(in_dir, speaker, "{}.wav".format(basename))
-    tg_path = os.path.join(
-        out_dir, "TextGrid", speaker, "{}.TextGrid".format(basename)
-    )
-
-    # Get alignments
-    textgrid = tgt.io.read_textgrid(tg_path)
-    phones_tier = textgrid.get_tier_by_name("phoneme")
-    phone, duration, start, end = get_alignment(config, phones_tier)
-    text = " ".join(phone)
-    if start >= end:
-        raise RuntimeError()
 
     # Read and trim wav files
     data: Tuple[int, np.ndarray] = load_wav(wav_path)
@@ -118,17 +107,16 @@ def get_tgt_and_wav(config: PreProcessConfig, speaker: str, basename: str) -> Tu
     assert sampling_rate == sr, f"sampling rate is invalid (required: {sampling_rate}, actually: {sr}, file: {wav_path})"
     wav = wav / max_wav_value
     wav = normalize(wav) * 0.95
-    wav = wav[
-        int(sampling_rate * start): int(sampling_rate * end)
-    ].astype(np.float32)
+    wav = wav.astype(np.float32)
 
-    return text, duration, wav
+    return wav
 
 
 class Preprocessor:
     def __init__(self, config: PreProcessConfig):
         self.config = config
         self.in_dir = config["path"]["data_path"]
+        self.text_dir = config["path"]["text_data_path"]
         self.out_dir = config["path"]["preprocessed_path"]
         self.val_size = config["val_size"]
         self.sampling_rate = config["audio"]["sampling_rate"]
@@ -149,7 +137,6 @@ class Preprocessor:
         os.makedirs((os.path.join(self.out_dir, "mel")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "pitch")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "energy")), exist_ok=True)
-        os.makedirs((os.path.join(self.out_dir, "duration")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "accent")), exist_ok=True)
 
         print("Processing Data ...")
@@ -165,30 +152,27 @@ class Preprocessor:
             wavs = list(filter(lambda p: ".wav" in p, os.listdir(os.path.join(self.in_dir, speaker))))
             for wav_name in tqdm(wavs, desc="File", position=1):
                 basename = wav_name.split(".")[0]
-                tg_path = os.path.join(
-                    self.out_dir, "TextGrid", speaker, "{}.TextGrid".format(basename)
-                )
-                if os.path.exists(tg_path):
-                    ret = self.process_utterance(speaker, basename)
-                    if ret is None:
-                        continue
-                    else:
-                        info, pitch, n = ret
-                    out.append(info)
-                else:
-                    raise Exception("TextGrid not found")
+                pitch, n = self.process_utterance(speaker, basename)
 
                 if len(pitch) > 0:
                     pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
 
                 n_frames += n
 
+            # phoneme
+            phoneme_path = os.path.join(self.text_dir, speaker, "phoneme.csv")
+            with open(phoneme_path) as f:
+                phonemes = f.read().split("\n")
+                # 前後の無音区間のポーズをつけ足す
+                out += ["|".join([text.split(",")[0], speaker, "pau " + text.split(",")[1] + " pau"]) for text in phonemes]
+
             # accent
-            accent_path = os.path.join(self.in_dir, speaker, "accent.csv")
+            accent_path = os.path.join(self.text_dir, speaker, "accent.csv")
             with open(accent_path) as f:
                 accents = f.read().split("\n")
                 basenames = [text.split(",")[0] for text in accents]
-                accents = [text.split(",")[1] for text in accents]
+                # 前後の無音区間のアクセント区切りをつけ足す
+                accents = ["# " + text.split(",")[1] + " #" for text in accents]
 
             for j, accent in enumerate(accents):
                 basename = basenames[j]
@@ -238,8 +222,8 @@ class Preprocessor:
 
         return out
 
-    def process_utterance(self, speaker: str, basename: str) -> Tuple[str, np.ndarray, np.ndarray]:
-        text, duration, wav = get_tgt_and_wav(self.config, speaker, basename)
+    def process_utterance(self, speaker: str, basename: str) -> Tuple[np.ndarray, np.ndarray]:
+        wav = get_wav(self.config, speaker, basename)
 
         # Compute fundamental frequency
         pitch, t = pw.dio(
@@ -249,7 +233,6 @@ class Preprocessor:
         )
         pitch = pw.stonemask(wav.astype(np.float64), pitch, t, self.sampling_rate)
 
-        pitch = pitch[: sum(duration)]
         if np.sum(pitch != 0) <= 1:
             raise RuntimeError()
 
@@ -262,24 +245,11 @@ class Preprocessor:
         )
         pitch: np.ndarray = interp_fn(np.arange(0, len(pitch)))
 
-        # Phoneme-level average
-        pos = 0
-        for i, d in enumerate(duration):
-            if d > 0:
-                pitch[i] = np.mean(pitch[pos : pos + d])
-            else:
-                pitch[i] = 0
-            pos += d
-        pitch = pitch[: len(duration)]
-
         # Compute mel-scale spectrogram
         mel_spectrogram = get_mel_from_wav(wav, self.STFT)
-        mel_spectrogram = mel_spectrogram[:, : sum(duration)]
+        assert pitch.size == mel_spectrogram.shape[1], "pitch length != mel spec length"
 
         # Save files
-        dur_filename = "{}-duration-{}.npy".format(speaker, basename)
-        np.save(os.path.join(self.out_dir, "duration", dur_filename), duration)
-
         pitch_filename = "{}-pitch-{}.npy".format(speaker, basename)
         np.save(os.path.join(self.out_dir, "pitch", pitch_filename), pitch)
 
@@ -290,7 +260,6 @@ class Preprocessor:
         )
 
         return (
-            "|".join([basename, speaker, text]),
             self.remove_outlier(pitch),
             mel_spectrogram.shape[1],
         )
