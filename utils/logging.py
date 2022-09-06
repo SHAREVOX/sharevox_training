@@ -21,6 +21,7 @@ def log(
         logger.add_scalar("Loss/mel_postnet_loss", losses[2], step)
         logger.add_scalar("Loss/duration_loss", losses[3], step)
         logger.add_scalar("Loss/pitch_loss", losses[4], step)
+        logger.add_scalar("Loss/alignment_loss", losses[5], step)
 
     if fig is not None:
         logger.add_figure(tag, fig, step)

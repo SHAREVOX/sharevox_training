@@ -51,7 +51,6 @@ class DatasetItem(TypedDict):
     accent: np.ndarray
     mel: np.ndarray
     pitch: np.ndarray
-    duration: np.ndarray
 
 
 ReProcessedItem = Tuple[
@@ -65,7 +64,6 @@ ReProcessedItem = Tuple[
     np.ndarray,
     np.int64,
     np.ndarray,
-    np.ndarray
 ]
 
 ReProcessedTextItem = Tuple[
@@ -125,12 +123,6 @@ class Dataset(TorchDataset):
             "{}-pitch-{}.npy".format(speaker, basename),
         )
         pitch = np.load(pitch_path)
-        duration_path = os.path.join(
-            self.preprocessed_path,
-            "duration",
-            "{}-duration-{}.npy".format(speaker, basename),
-        )
-        duration = np.load(duration_path)
 
         sample = DatasetItem(
             id=basename,
@@ -139,7 +131,6 @@ class Dataset(TorchDataset):
             accent=accent,
             mel=mel,
             pitch=pitch,
-            duration=duration
         )
 
         return sample
@@ -167,7 +158,6 @@ class Dataset(TorchDataset):
         accents = [data[idx]["accent"] for idx in idxs]
         mels = [data[idx]["mel"] for idx in idxs]
         pitches = [data[idx]["pitch"] for idx in idxs]
-        durations = [data[idx]["duration"] for idx in idxs]
 
         text_lens = np.array([text.shape[0] for text in texts])
         mel_lens = np.array([mel.shape[0] for mel in mels])
@@ -177,7 +167,6 @@ class Dataset(TorchDataset):
         accents = pad_1D(accents)
         mels = pad_2D(mels)
         pitches = pad_1D(pitches)
-        durations = pad_1D(durations)
 
         max_text_len: np.int64 = max(text_lens)
         max_mel_len: np.int64 = max(mel_lens)
@@ -193,7 +182,6 @@ class Dataset(TorchDataset):
             mel_lens,
             max_mel_len,
             pitches,
-            durations,
         )
 
     def collate_fn(self, data: List[DatasetItem]) -> List[ReProcessedItem]:
