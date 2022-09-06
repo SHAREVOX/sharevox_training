@@ -121,11 +121,9 @@ class GaussianUpsampling(torch.nn.Module):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("config", type=str, help="path to config yaml")
     parser.add_argument("--restore_step", type=int, default=0)
     parser.add_argument("--speaker_num", type=int, default=10)
-    parser.add_argument(
-        "-c", "--config", type=str, required=True, help="path to config yaml"
-    )
     args = parser.parse_args()
     config: Config = yaml.load(
         open(args.config, "r"), Loader=yaml.FullLoader
