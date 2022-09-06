@@ -38,7 +38,7 @@ class Variance(nn.Module):
         accents: Tensor,
         speakers: Tensor,
     ):
-        pitches, log_durations = self.variance_model(phonemes, accents, speakers)
+        pitches, log_durations, _ = self.variance_model(phonemes, accents, speakers)
         pitches = torch.log(pitches * self.pitch_std + self.pitch_mean)
         durations = torch.clamp((torch.exp(log_durations) - 1) / (self.sampling_rate / self.hop_length), min=0.01)
         return pitches, durations
@@ -61,7 +61,7 @@ class Embedder(nn.Module):
         speakers: Tensor,
     ):
         pitches = (torch.exp(pitches) - self.pitch_mean) / self.pitch_std
-        feature_embedded = self.embedder_model(phonemes, pitches, speakers)
+        feature_embedded = self.embedder_model(phonemes, pitches.unsqueeze(-1), speakers)
         return feature_embedded
 
 
@@ -83,6 +83,42 @@ class Decoder(nn.Module):
         return wavs
 
 
+class GaussianUpsampling(torch.nn.Module):
+    """Gaussian upsampling with fixed temperature as in:
+
+    https://arxiv.org/abs/2010.04301
+
+    """
+
+    def __init__(self, delta=0.1):
+        super().__init__()
+        self.delta = delta
+
+    def forward(self, hs, ds):
+        """Upsample hidden states according to durations.
+
+        Args:
+            hs (Tensor): Batched hidden state to be expanded (B, T_text, adim).
+            ds (Tensor): Batched token duration (B, T_text).
+
+        Returns:
+            Tensor: Expanded hidden state (B, T_feat, adim).
+
+        """
+        device = ds.device
+
+        T_feats = ds.sum().int()
+        t = torch.arange(0, T_feats).unsqueeze(0).to(device).float()
+
+        c = ds.cumsum(dim=-1) - ds / 2
+        c = c.float()
+        energy = -1 * self.delta * (t.unsqueeze(-1) - c.unsqueeze(1)) ** 2
+
+        p_attn = torch.softmax(energy, dim=2)  # (B, T_feats, T_text)
+        hs = torch.matmul(p_attn, hs)
+        return hs
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--restore_step", type=int, default=0)
@@ -96,6 +132,8 @@ if __name__ == '__main__':
     )
 
     variance_model, embedder_model, decoder_model, _, _ = get_model(args.restore_step, config, device, args.speaker_num, False)
+    gaussian_model = GaussianUpsampling()
+    gaussian_model = gaussian_model.eval()
     fregan_model = get_vocoder(device, config["model"]["vocoder_type"])
     with open(
         os.path.join(config["preprocess"]["path"]["preprocessed_path"], "stats.json")
@@ -112,11 +150,11 @@ if __name__ == '__main__':
     phonemes = torch.from_numpy(np.array([[phoneme_to_id[p] for p in "k o N n i ch i w a".split(" ")]])).to(dtype=torch.int64, device=device)
     accents = torch.from_numpy(np.array([[accent_to_id[a] for a in "_ [ _ _ _ _ _ _ #".split(" ")]])).to(dtype=torch.int64, device=device)
     speakers = torch.from_numpy(np.array([0])).to(dtype=torch.int64, device=device)
+
+    variance_input = (phonemes, accents, speakers)
     torch.onnx.export(
         variance_model,
-        (
-            phonemes, accents, speakers
-        ),
+        variance_input,
         "variance_model.onnx",
         input_names=["phonemes", "accents", "speakers"],
         output_names=["pitches", "durations"],
@@ -129,8 +167,8 @@ if __name__ == '__main__':
         opset_version=OPSET,
     )
 
-    pitches = torch.from_numpy(np.array([[5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5]])).to(dtype=torch.float, device=device)
-    embedber_input = (phonemes, pitches, speakers)
+    pitches, durations = variance_model(*variance_input)
+    embedber_input = (phonemes, pitches.squeeze(0).transpose(0, 1), speakers)
     torch.onnx.export(
         embedder_model,
         embedber_input,
@@ -145,6 +183,23 @@ if __name__ == '__main__':
         opset_version=OPSET,
     )
     embedded_tensor = embedder_model(*embedber_input)
+    durations = (durations * (48000 / 256)).to(torch.int64).transpose(1, 2).squeeze(0)
+    torch.onnx.export(
+        gaussian_model,
+        (
+            embedded_tensor,
+            durations,
+        ),
+        "gaussian_model.onnx",
+        input_names=["embedded_tensor", "durations"],
+        output_names=["length_regulated_tensor"],
+        dynamic_axes={
+            "embedded_tensor": {1: "length"},
+            "durations": {1: "length"},
+            "length_regulated_tensor": {1: "outLength"},
+        },
+        opset_version=OPSET,
+    )
 
     torch.onnx.export(
         decoder_model,

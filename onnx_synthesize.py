@@ -47,6 +47,7 @@ if __name__ == "__main__":
 
     variance_session = onnxruntime.InferenceSession("variance_model.onnx", providers=['CPUExecutionProvider'])
     embedder_session = onnxruntime.InferenceSession("embedder_model.onnx", providers=['CPUExecutionProvider'])
+    gaussian_session = onnxruntime.InferenceSession("gaussian_model.onnx", providers=['CPUExecutionProvider'])
     decoder_session = onnxruntime.InferenceSession("decoder_model.onnx", providers=['CPUExecutionProvider'])
 
     pitches, durations = variance_session.run(["pitches", "durations"], {
@@ -62,7 +63,10 @@ if __name__ == "__main__":
     })[0]
 
     durations = (durations[0].T * (48000 / 256)).astype(dtype=np.int64)
-    length_regulated_tensor = numpy.repeat(feature_embedded, durations[0], axis=1)
+    length_regulated_tensor = gaussian_session.run(["length_regulated_tensor"], {
+        "embedded_tensor": feature_embedded,
+        "durations": durations,
+    })[0]
 
     wav = decoder_session.run(["wav"], {
         "length_regulated_tensor": length_regulated_tensor,
