@@ -19,20 +19,20 @@ preprocess:
 model:
   variance_encoder_type: "transformer"
   variance_encoder:
-    hidden: 32
+    hidden: 48
     heads: 2
     layers: 2
     dropout_rate: 0.2
     normalize_before: True
     concat_after: True
     layer_type: "conv1d"
-    kernel_size: 3
+    kernel_size: 5
     pos_enc_layer_type: "abs_pos"
     self_attn_layer_type: "selfattn"
     activation_type: "relu"
   phoneme_encoder_type: "transformer"
   phoneme_encoder:
-    hidden: 256
+    hidden: 192
     heads: 2
     layers: 1
     dropout_rate: 0.2
@@ -45,14 +45,14 @@ model:
     activation_type: "relu"
   decoder_type: "conformer"
   decoder:
-    hidden: 256
+    hidden: 192
     heads: 2
-    layers: 5
+    layers: 4
     dropout_rate: 0.2
     normalize_before: True
     concat_after: True
     layer_type: "conv1d"
-    kernel_size: 3
+    kernel_size: 5
     pos_enc_layer_type: "rel_pos"
     self_attn_layer_type: "rel_selfattn"
     activation_type: "relu"
