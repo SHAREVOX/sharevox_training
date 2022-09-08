@@ -89,7 +89,7 @@ def get_model(
     return variance_model, embedder_model, decoder_model, extractor_model, None
 
 
-def get_param_num(model: nn.DataParallel) -> int:
+def get_param_num(model: nn.Module) -> int:
     num_param = sum(param.numel() for param in model.parameters())
     return num_param
 
