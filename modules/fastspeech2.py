@@ -7,6 +7,7 @@ from typing import TypedDict, Literal, Optional, Union
 import fregan
 import hifigan
 import mb_melgan
+from modules.alignment import AlignmentModule, viterbi_decode, average_by_duration
 from modules.tacotron2.decoder import Postnet
 from modules.conformer.encoder import Encoder as ConformerEncoder
 from modules.transformer.encoder import Encoder as TransformerEncoder, EncoderConfig
@@ -111,7 +112,8 @@ class PitchAndDurationPredictor(BaseModule):
         log_durations: Tensor = self.duration_predictor(
             log_durations_args[0], log_durations_args[1].unsqueeze(-1))
 
-        return pitches, log_durations
+        # 音素のみを埋め込み、エンコードしたTensorを音素アライメント用に出力する
+        return pitches, log_durations, log_durations_args[0]
 
     def __forward_preprocessing(
         self,
@@ -141,6 +143,21 @@ class PitchAndDurationPredictor(BaseModule):
             d_masks = make_pad_mask(phoneme_lens).to(x.device)
 
         return hs, d_masks
+
+
+class PitchAndDurationExtractor(nn.Module):
+    def __init__(self, model_config: ModelConfig):
+        super(PitchAndDurationExtractor, self).__init__()
+        hidden = model_config["variance_encoder"]["hidden"]
+
+        self.alignment_module = AlignmentModule(hidden, 80)
+
+    def forward(self, hs: Tensor, pitches: Tensor, mels: Tensor, phoneme_lens: LongTensor, mel_lens: LongTensor):
+        h_masks = make_pad_mask(phoneme_lens).to(hs.device)
+        log_p_attn = self.alignment_module(hs, mels, h_masks)
+        durations, bin_loss = viterbi_decode(log_p_attn, phoneme_lens, mel_lens)
+        avg_pitches = average_by_duration(durations, pitches.squeeze(-1), phoneme_lens, mel_lens).unsqueeze(-1)
+        return avg_pitches, durations, log_p_attn, bin_loss
 
 
 class FeatureEmbedder(BaseModule):
@@ -242,7 +259,7 @@ class FeatureEmbedder(BaseModule):
             pitch_embeds = self.pitch_embedding(self.bucketize(pitches, self.pitch_bins))
         else:
             # fastpitch style
-            pitch_embeds = self.pitch_embedding(pitches.unsqueeze(1)).transpose(1, 2)
+            pitch_embeds = self.pitch_embedding(pitches.transpose(1, 2)).transpose(1, 2)
 
         feature_embeded += pitch_embeds
         return feature_embeded

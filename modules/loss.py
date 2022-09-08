@@ -5,7 +5,10 @@
 
 from typing import Tuple, Optional
 
+import numpy as np
+from scipy.stats import betabinom
 import torch
+import torch.nn.functional as F
 from torch import nn, Tensor, LongTensor
 
 from utils.mask import make_non_pad_mask
@@ -19,6 +22,7 @@ class FastSpeech2Loss(nn.Module):
         # define criterions
         self.l1_criterion = nn.L1Loss()
         self.mse_criterion = nn.MSELoss()
+        self.forward_sum_loss = ForwardSumLoss()
 
     def forward(
         self,
@@ -29,9 +33,10 @@ class FastSpeech2Loss(nn.Module):
         mel_targets: Tensor,
         duration_targets: LongTensor,
         pitch_targets: Tensor,
+        log_p_attn: Tensor,
         input_lens: LongTensor,
         output_lens: LongTensor,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Calculate forward propagation.
 
         Args:
@@ -42,6 +47,7 @@ class FastSpeech2Loss(nn.Module):
             mel_targets (Tensor): Batch of target mel-spectrogram (B, T_feats, odim).
             duration_targets (LongTensor): Batch of durations (B, T_text).
             pitch_targets (Tensor): Batch of target token-averaged pitch (B, T_text, 1).
+            log_p_attn (Tensor): Batch of log probability of attention matrix (B, T_feats, T_text).
             input_lens (LongTensor): Batch of the lengths of each input (B,).
             output_lens (LongTensor): Batch of the lengths of each target (B,).
 
@@ -64,14 +70,114 @@ class FastSpeech2Loss(nn.Module):
         log_duration_targets = log_duration_targets.masked_select(duration_masks)
         pitch_masks = make_non_pad_mask(input_lens).to(mel_targets.device)
         pitch_outputs = pitch_outputs.squeeze(-1).masked_select(pitch_masks)
-        pitch_targets = pitch_targets.masked_select(pitch_masks)
+        pitch_targets = pitch_targets.squeeze(-1).masked_select(pitch_masks)
 
         # calculate loss
         mel_loss = self.l1_criterion(outputs, mel_targets)
         postnet_mel_loss = self.l1_criterion(postnet_outputs, mel_targets)
         duration_loss = self.mse_criterion(log_duration_outputs, log_duration_targets)
         pitch_loss = self.mse_criterion(pitch_outputs, pitch_targets)
+        forward_sum_loss = self.forward_sum_loss(log_p_attn, input_lens, output_lens)
 
-        total_loss = mel_loss + postnet_mel_loss + duration_loss + pitch_loss
+        total_loss = mel_loss + postnet_mel_loss + duration_loss + pitch_loss + forward_sum_loss
 
-        return total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss
+        return total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss, forward_sum_loss
+
+
+class ForwardSumLoss(torch.nn.Module):
+    """Forwardsum loss described at https://openreview.net/forum?id=0NQwnnwAORi"""
+
+    def __init__(self, cache_prior: bool = True):
+        """Initialize forwardsum loss module.
+        Args:
+            cache_prior (bool): Whether to cache beta-binomial prior
+        """
+        super().__init__()
+        self.cache_prior = cache_prior
+        self._cache = {}
+
+    def forward(
+        self,
+        log_p_attn: torch.Tensor,
+        input_lens: torch.Tensor,
+        output_lens: torch.Tensor,
+        blank_prob: float = np.e ** -1,
+    ) -> torch.Tensor:
+        """Calculate forward propagation.
+        Args:
+            log_p_attn (Tensor): Batch of log probability of attention matrix
+                (B, T_feats, T_text).
+            input_lens (Tensor): Batch of the lengths of each input (B,).
+            output_lens (Tensor): Batch of the lengths of each target (B,).
+            blank_prob (float): Blank symbol probability.
+        Returns:
+            Tensor: forwardsum loss value.
+        """
+        B = log_p_attn.size(0)
+
+        # add beta-binomial prior
+        bb_prior = self._generate_prior(input_lens, output_lens)
+        bb_prior = bb_prior.to(dtype=log_p_attn.dtype, device=log_p_attn.device)
+        log_p_attn = log_p_attn + bb_prior
+
+        # a row must be added to the attention matrix to account for
+        #    blank token of CTC loss
+        # (B,T_feats,T_text+1)
+        log_p_attn_pd = F.pad(log_p_attn, (1, 0, 0, 0, 0, 0), value=np.log(blank_prob))
+
+        loss = 0
+        for bidx in range(B):
+            # construct target sequnece.
+            # Every text token is mapped to a unique sequnece number.
+            target_seq = torch.arange(1, input_lens[bidx] + 1).unsqueeze(0)
+            cur_log_p_attn_pd = log_p_attn_pd[
+                                bidx, : output_lens[bidx], : input_lens[bidx] + 1
+                                ].unsqueeze(
+                1
+            )  # (T_feats,1,T_text+1)
+            loss += F.ctc_loss(
+                log_probs=cur_log_p_attn_pd,
+                targets=target_seq,
+                input_lengths=output_lens[bidx: bidx + 1],
+                target_lengths=input_lens[bidx: bidx + 1],
+                zero_infinity=True,
+            )
+        loss = loss / B
+        return loss
+
+    def _generate_prior(self, phoneme_lens, mel_lens, w=1) -> torch.Tensor:
+        """Generate alignment prior formulated as beta-binomial distribution
+        Args:
+            phoneme_lens (Tensor): Batch of the lengths of each input (B,).
+            mel_lens (Tensor): Batch of the lengths of each target (B,).
+            w (float): Scaling factor; lower -> wider the width.
+        Returns:
+            Tensor: Batched 2d static prior matrix (B, T_feats, T_text).
+        """
+        B = len(phoneme_lens)
+        T_text = phoneme_lens.max()
+        T_feats = mel_lens.max()
+
+        bb_prior = torch.full((B, T_feats, T_text), fill_value=-np.inf)
+        for bidx in range(B):
+            T = mel_lens[bidx].item()
+            N = phoneme_lens[bidx].item()
+
+            key = str(T) + "," + str(N)
+            if self.cache_prior and key in self._cache:
+                prob = self._cache[key]
+            else:
+                alpha = w * np.arange(1, T + 1, dtype=float)  # (T,)
+                beta = w * np.array([T - t + 1 for t in alpha])
+                k = np.arange(N)
+                batched_k = k[..., None]  # (N,1)
+                prob = betabinom.logpmf(batched_k, N, alpha, beta)  # (N,T)
+
+            # store cache
+            if self.cache_prior and key not in self._cache:
+                self._cache[key] = prob
+
+            prob = torch.from_numpy(prob).transpose(0, 1)  # -> (T,N)
+            bb_prior[bidx, :T, :N] = prob
+
+        return bb_prior

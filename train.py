@@ -11,9 +11,10 @@ from tqdm import tqdm
 
 import fregan
 from dataset import Dataset
-from modules.length_regulator import LengthRegulator
+from modules.gaussian_upsampling import GaussianUpsampling
 from modules.loss import FastSpeech2Loss
 from utils.logging import log
+from utils.mask import make_non_pad_mask
 from utils.model import Config, get_model, get_param_num, get_vocoder
 from utils.synth import synth_one_sample
 from utils.tools import to_device, ReProcessedItemTorch
@@ -25,6 +26,7 @@ def evaluate(
     variance_model: DataParallel,  # PitchAndDurationPredictor
     embedder_model: DataParallel,  # FeatureEmbedder
     decoder_model: DataParallel,  # MelSpectrogramDecoder
+    extractor_model: DataParallel,  # PitchAndDurationExtractor
     length_regulator: DataParallel,
     step: int,
     config: Config,
@@ -47,7 +49,7 @@ def evaluate(
     Loss = FastSpeech2Loss().to(device)
 
     # Evaluation
-    loss_sums = [0 for _ in range(5)]
+    loss_sums = [0 for _ in range(6)]
     count = 0
     for batchs in loader:
         for batch in batchs:
@@ -63,26 +65,36 @@ def evaluate(
                 mel_lens,
                 max_mel_len,
                 pitches,
-                durations,
             ) = batch
             with torch.no_grad():
-                pitch_outputs, log_duration_outputs = variance_model(
+                pitch_outputs, log_duration_outputs, hs = variance_model(
                     phonemes=phonemes,
                     accents=accents,
                     speakers=speakers,
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                 )
+                avg_pitches, durations, log_p_attn, bin_loss = extractor_model(
+                    hs=hs,
+                    pitches=pitches,
+                    mels=mels,
+                    phoneme_lens=phoneme_lens,
+                    mel_lens=mel_lens,
+                )
                 feature_embedded = embedder_model(
                     phonemes=phonemes,
-                    pitches=pitches,
+                    pitches=avg_pitches,
                     speakers=speakers,
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                 )
+                h_masks = make_non_pad_mask(mel_lens).to(feature_embedded.device)
+                d_masks = make_non_pad_mask(phoneme_lens).to(durations.device)
                 length_regulated_tensor = length_regulator(
-                    xs=feature_embedded,
+                    hs=feature_embedded,
                     ds=durations,
+                    h_masks=h_masks,
+                    d_masks=d_masks,
                 )
                 outputs, postnet_outputs = decoder_model(
                     length_regulated_tensor=length_regulated_tensor,
@@ -97,10 +109,16 @@ def evaluate(
                     pitch_outputs=pitch_outputs,
                     mel_targets=mels,
                     duration_targets=durations,
-                    pitch_targets=pitches,
+                    pitch_targets=avg_pitches,
+                    log_p_attn=log_p_attn,
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
+                # align loss
+                losses[5] = losses[5] + bin_loss
+
+                # total loss
+                losses[0] = losses[0] + bin_loss
 
                 for i in range(len(losses)):
                     loss_sums[i] += losses[i].item() * len(batch[0])
@@ -109,7 +127,7 @@ def evaluate(
                 fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
                     ids=ids,
                     duration_targets=durations,
-                    pitch_targets=pitches,
+                    pitch_targets=avg_pitches,
                     mel_targets=mels,
                     mel_predictions=postnet_outputs,
                     phoneme_lens=phoneme_lens,
@@ -144,7 +162,7 @@ def evaluate(
     loss_means = [loss_sum / len(dataset) for loss_sum in loss_sums]
     log(logger, step, losses=loss_means)
 
-    message = "Validation Step {}, Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}".format(
+    message = "Validation Step {}, Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}, Alignment Loss: {:.4f}".format(
         *([step] + loss_means)
     )
 
@@ -169,11 +187,12 @@ def main(restore_step: int, speaker_num, config: Config):
     )
 
     # Prepare model
-    variance_model, embedder_model, decoder_model, optimizer = get_model(restore_step, config, device, speaker_num, train=True)
+    variance_model, embedder_model, decoder_model, extractor_model, optimizer = get_model(restore_step, config, device, speaker_num, train=True)
     variance_model = nn.DataParallel(variance_model)
     embedder_model = nn.DataParallel(embedder_model)
     decoder_model = nn.DataParallel(decoder_model)
-    length_regulator = nn.DataParallel(LengthRegulator())
+    extractor_model = nn.DataParallel(extractor_model)
+    length_regulator = nn.DataParallel(GaussianUpsampling())
 
     num_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model)
     Loss = FastSpeech2Loss().to(device)
@@ -223,27 +242,37 @@ def main(restore_step: int, speaker_num, config: Config):
                     mel_lens,
                     max_mel_len,
                     pitches,
-                    durations,
                 ) = batch
 
                 # Forward
-                pitch_outputs, log_duration_outputs = variance_model(
+                pitch_outputs, log_duration_outputs, hs = variance_model(
                     phonemes=phonemes,
                     accents=accents,
                     speakers=speakers,
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                 )
+                avg_pitches, durations, log_p_attn, bin_loss = extractor_model(
+                    hs=hs,
+                    pitches=pitches,
+                    mels=mels,
+                    phoneme_lens=phoneme_lens,
+                    mel_lens=mel_lens,
+                )
                 feature_embedded = embedder_model(
                     phonemes=phonemes,
-                    pitches=pitches,
+                    pitches=avg_pitches,
                     speakers=speakers,
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                 )
+                h_masks = make_non_pad_mask(mel_lens).to(feature_embedded.device)
+                d_masks = make_non_pad_mask(phoneme_lens).to(durations.device)
                 length_regulated_tensor = length_regulator(
-                    xs=feature_embedded,
+                    hs=feature_embedded,
                     ds=durations,
+                    h_masks=h_masks,
+                    d_masks=d_masks,
                 )
                 outputs, postnet_outputs = decoder_model(
                     length_regulated_tensor=length_regulated_tensor,
@@ -258,11 +287,15 @@ def main(restore_step: int, speaker_num, config: Config):
                     pitch_outputs=pitch_outputs,
                     mel_targets=mels,
                     duration_targets=durations,
-                    pitch_targets=pitches,
+                    pitch_targets=avg_pitches,
+                    log_p_attn=log_p_attn,
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                total_loss = losses[0]
+                # align loss
+                losses[5] = losses[5] + bin_loss
+
+                total_loss = losses[0] + bin_loss
 
                 # Backward
                 total_loss = total_loss / grad_acc_step
@@ -272,6 +305,7 @@ def main(restore_step: int, speaker_num, config: Config):
                     nn.utils.clip_grad_norm_(variance_model.parameters(), grad_clip_thresh)
                     nn.utils.clip_grad_norm_(embedder_model.parameters(), grad_clip_thresh)
                     nn.utils.clip_grad_norm_(decoder_model.parameters(), grad_clip_thresh)
+                    nn.utils.clip_grad_norm_(extractor_model.parameters(), grad_clip_thresh)
 
                     # Update weights
                     optimizer.step_and_update_lr()
@@ -280,7 +314,7 @@ def main(restore_step: int, speaker_num, config: Config):
                 if step % log_step == 0:
                     losses = [l.item() for l in losses]
                     message1 = "Step {}/{}, ".format(step, total_step)
-                    message2 = "Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}".format(
+                    message2 = "Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}, Alignment Loss: {:.4f}".format(
                         *losses
                     )
 
@@ -295,7 +329,7 @@ def main(restore_step: int, speaker_num, config: Config):
                     fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
                         ids=ids,
                         duration_targets=durations,
-                        pitch_targets=pitches,
+                        pitch_targets=avg_pitches,
                         mel_targets=mels,
                         mel_predictions=postnet_outputs,
                         phoneme_lens=phoneme_lens,
@@ -326,8 +360,9 @@ def main(restore_step: int, speaker_num, config: Config):
                     variance_model.eval()
                     embedder_model.eval()
                     decoder_model.eval()
+                    extractor_model.eval()
                     message = evaluate(
-                        variance_model, embedder_model, decoder_model, length_regulator, step, config, val_logger, vocoder
+                        variance_model, embedder_model, decoder_model, extractor_model, length_regulator, step, config, val_logger, vocoder
                     )
                     with open(os.path.join(val_log_path, "log.txt"), "a") as f:
                         f.write(message + "\n")
@@ -336,6 +371,7 @@ def main(restore_step: int, speaker_num, config: Config):
                     variance_model.train()
                     embedder_model.train()
                     decoder_model.train()
+                    extractor_model.train()
 
                 if step % save_step == 0:
                     torch.save(
@@ -343,10 +379,12 @@ def main(restore_step: int, speaker_num, config: Config):
                             "variance_model": variance_model.module.state_dict(),
                             "embedder_model": embedder_model.module.state_dict(),
                             "decoder_model": decoder_model.module.state_dict(),
+                            "extractor_model": extractor_model.module.state_dict(),
                             "optimizer": {
                                 "variance": optimizer._variance_optimizer.state_dict(),
                                 "embedder": optimizer._embedder_optimizer.state_dict(),
                                 "decoder": optimizer._decoder_optimizer.state_dict(),
+                                "extractor": optimizer._extractor_optimizer.state_dict(),
                             },
                         },
                         os.path.join(
