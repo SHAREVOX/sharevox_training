@@ -7,7 +7,6 @@ from scipy.interpolate import interp1d
 
 from text import accent_to_id
 
-import tgt
 from scipy.io.wavfile import read as load_wav
 from sklearn.preprocessing import StandardScaler
 from librosa.util import normalize
@@ -49,49 +48,6 @@ class PreProcessConfig(TypedDict):
     audio: PreProcessAudio
     stft: PreProcessSTFT
     mel: PreProcessMel
-
-
-def get_alignment(config: PreProcessConfig, tier: tgt.IntervalTier) -> Tuple[List[str], List[int], float, float]:
-    sil_phones = ["sil", "sp", "spn"]
-    sampling_rate = config["audio"]["sampling_rate"]
-    hop_length = config["stft"]["hop_length"]
-
-    phones = []
-    durations = []
-    start_time = 0.
-    end_time = 0.
-    end_idx = 0
-    for t in tier._objects:
-        s, e, p = t.start_time, t.end_time, t.text
-
-        # Trim leading silences
-        if phones == []:
-            if p in sil_phones:
-                continue
-            else:
-                start_time = s
-
-        if p not in sil_phones:
-            # For ordinary phones
-            phones.append(p)
-            end_time = e
-            end_idx = len(phones)
-        else:
-            # For silent phones
-            phones.append(p)
-
-        durations.append(
-            int(
-                np.round(e * sampling_rate / hop_length)
-                - np.round(s * sampling_rate / hop_length)
-            )
-        )
-
-    # Trim tailing silences
-    phones = phones[:end_idx]
-    durations = durations[:end_idx]
-
-    return phones, durations, start_time, end_time
 
 
 def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> np.ndarray:
