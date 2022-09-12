@@ -237,7 +237,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
     val_logger = SummaryWriter(val_log_path)
 
     # Training
-    step = args.restore_step + 1
+    step = restore_step + 1
     epoch = 1
     grad_acc_step = config["train"]["optimizer"]["grad_acc_step"]
     grad_clip_thresh = config["train"]["optimizer"]["grad_clip_thresh"]
@@ -249,7 +249,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
     if rank == 0:
         outer_bar = tqdm(total=total_step, desc="Training", position=0)
-        outer_bar.n = args.restore_step
+        outer_bar.n = restore_step
         outer_bar.update()
 
     while True:
