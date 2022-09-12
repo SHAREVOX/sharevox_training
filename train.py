@@ -115,6 +115,7 @@ def evaluate(
                     output_lens=mel_lens,
                 )
                 # align loss
+                losses = list(losses)
                 losses[5] = losses[5] + bin_loss
 
                 # total loss
@@ -292,6 +293,7 @@ def main(restore_step: int, speaker_num, config: Config):
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
+                losses = list(losses)
                 # align loss
                 losses[5] = losses[5] + bin_loss
 
