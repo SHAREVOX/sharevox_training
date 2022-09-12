@@ -454,7 +454,7 @@ if __name__ == '__main__':
         num_gpus = torch.cuda.device_count()
         batch_size = config["train"]["optimizer"]["batch_size"]
         config["train"]["optimizer"]["batch_size"] = int(batch_size / num_gpus)
-        print('Batch size per GPU :', batch_size)
+        print('Batch size per GPU :', config["train"]["optimizer"]["batch_size"])
     else:
         raise Exception("cuda is not available")
 
