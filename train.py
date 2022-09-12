@@ -2,10 +2,12 @@ import argparse
 import os
 
 import torch
+import torch.multiprocessing as mp
 import yaml
 from torch import nn
-from torch.nn import DataParallel
-from torch.utils.data import DataLoader
+from torch.distributed import init_process_group
+from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -19,15 +21,15 @@ from utils.model import Config, get_model, get_param_num, get_vocoder
 from utils.synth import synth_one_sample
 from utils.tools import to_device, ReProcessedItemTorch
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.backends.cudnn.benchmark = True
 
 
 def evaluate(
-    variance_model: DataParallel,  # PitchAndDurationPredictor
-    embedder_model: DataParallel,  # FeatureEmbedder
-    decoder_model: DataParallel,  # MelSpectrogramDecoder
-    extractor_model: DataParallel,  # PitchAndDurationExtractor
-    length_regulator: DataParallel,
+    variance_model: nn.Module,  # PitchAndDurationPredictor
+    embedder_model: nn.Module,  # FeatureEmbedder
+    decoder_model: nn.Module,  # MelSpectrogramDecoder
+    extractor_model: nn.Module,  # PitchAndDurationExtractor
+    length_regulator: nn.Module,
     step: int,
     config: Config,
     logger: SummaryWriter,
@@ -38,11 +40,12 @@ def evaluate(
         "val.txt", config["preprocess"], config["train"], sort=False, drop_last=False
     )
     batch_size = config["train"]["optimizer"]["batch_size"]
+    device = torch.device('cuda:0')
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=lambda x: [to_device(d, device) for d in dataset.collate_fn(x)],
+        collate_fn=dataset.collate_fn,
     )
 
     # Get loss function
@@ -52,8 +55,8 @@ def evaluate(
     loss_sums = [0 for _ in range(6)]
     count = 0
     for batchs in loader:
-        for batch in batchs:
-            batch: ReProcessedItemTorch
+        for _batch in batchs:
+            batch: ReProcessedItemTorch = to_device(_batch, device)
             (
                 ids,
                 speakers,
@@ -170,34 +173,54 @@ def evaluate(
     return message
 
 
-def main(restore_step: int, speaker_num, config: Config):
-    print("Prepare training ...")
+def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: int):
+    if rank == 0:
+        print("Prepare training ...")
+    if num_gpus > 1:
+        init_process_group(backend="nccl", init_method="env://",
+                           world_size=num_gpus, rank=rank)
+    device = torch.device('cuda:{:d}'.format(rank))
 
     # Get dataset
     dataset = Dataset(
         "train.txt", config["preprocess"], config["train"], sort=True, drop_last=True
     )
     batch_size = config["train"]["optimizer"]["batch_size"]
-    group_size = 4  # Set this larger than 1 to enable sorting in Dataset
+    if num_gpus > 1:
+        group_size = 1
+    else:
+        group_size = 4  # Set this larger than 1 to enable sorting in Dataset
     assert batch_size * group_size < len(dataset)
+
+    sampler = DistributedSampler(dataset) if num_gpus > 1 else None
+
+    cpu_count = os.cpu_count()
+    if cpu_count > 8:
+        cpu_count = 8
     loader = DataLoader(
         dataset,
         batch_size=batch_size * group_size,
-        shuffle=True,
-        collate_fn=lambda x: [to_device(d, device) for d in dataset.collate_fn(x)],
+        shuffle=num_gpus == 1,
+        num_workers=cpu_count,
+        sampler=sampler,
+        pin_memory=True,
+        drop_last=True,
+        collate_fn=dataset.collate_fn,
     )
 
     # Prepare model
     variance_model, embedder_model, decoder_model, extractor_model, optimizer = get_model(restore_step, config, device, speaker_num, train=True)
-    variance_model = nn.DataParallel(variance_model)
-    embedder_model = nn.DataParallel(embedder_model)
-    decoder_model = nn.DataParallel(decoder_model)
-    extractor_model = nn.DataParallel(extractor_model)
-    length_regulator = nn.DataParallel(GaussianUpsampling())
+    length_regulator = GaussianUpsampling().to(device)
+    if num_gpus > 1:
+        variance_model = DistributedDataParallel(variance_model, device_ids=[rank]).to(device)
+        embedder_model = DistributedDataParallel(embedder_model, device_ids=[rank]).to(device)
+        decoder_model = DistributedDataParallel(decoder_model, device_ids=[rank]).to(device)
+        extractor_model = DistributedDataParallel(extractor_model, device_ids=[rank]).to(device)
 
     num_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model)
     Loss = FastSpeech2Loss().to(device)
-    print("Number of FastSpeech2 Parameters:", num_param)
+    if rank == 0:
+        print("Number of FastSpeech2 Parameters:", num_param)
 
     # Load vocoder
     vocoder = get_vocoder(device, config["model"]["vocoder_type"])
@@ -213,7 +236,7 @@ def main(restore_step: int, speaker_num, config: Config):
     val_logger = SummaryWriter(val_log_path)
 
     # Training
-    step = args.restore_step + 1
+    step = restore_step + 1
     epoch = 1
     grad_acc_step = config["train"]["optimizer"]["grad_acc_step"]
     grad_clip_thresh = config["train"]["optimizer"]["grad_clip_thresh"]
@@ -223,15 +246,21 @@ def main(restore_step: int, speaker_num, config: Config):
     synth_step = config["train"]["step"]["synth_step"]
     val_step = config["train"]["step"]["val_step"]
 
-    outer_bar = tqdm(total=total_step, desc="Training", position=0)
-    outer_bar.n = args.restore_step
-    outer_bar.update()
+    if rank == 0:
+        outer_bar = tqdm(total=total_step, desc="Training", position=0)
+        outer_bar.n = restore_step
+        outer_bar.update()
 
     while True:
-        inner_bar = tqdm(total=len(loader), desc="Epoch {}".format(epoch), position=1)
+        if rank == 0:
+            inner_bar = tqdm(total=len(loader), desc="Epoch {}".format(epoch), position=1)
+
+        if num_gpus > 1:
+            sampler.set_epoch(epoch)
+
         for batchs in loader:
-            for batch in batchs:
-                batch: ReProcessedItemTorch
+            for _batch in batchs:
+                batch: ReProcessedItemTorch = to_device(_batch, device)
                 (
                     ids,
                     speakers,
@@ -302,6 +331,7 @@ def main(restore_step: int, speaker_num, config: Config):
                 # Backward
                 total_loss = total_loss / grad_acc_step
                 total_loss.backward()
+
                 if step % grad_acc_step == 0:
                     # Clipping gradients to avoid gradient explosion
                     nn.utils.clip_grad_norm_(variance_model.parameters(), grad_clip_thresh)
@@ -313,94 +343,98 @@ def main(restore_step: int, speaker_num, config: Config):
                     optimizer.step_and_update_lr()
                     optimizer.zero_grad()
 
-                if step % log_step == 0:
-                    losses = [l.item() for l in losses]
-                    message1 = "Step {}/{}, ".format(step, total_step)
-                    message2 = "Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}, Alignment Loss: {:.4f}".format(
-                        *losses
-                    )
+                if rank == 0:
+                    if step % log_step == 0:
+                        losses = [l.item() for l in losses]
+                        message1 = "Step {}/{}, ".format(step, total_step)
+                        message2 = "Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}, Alignment Loss: {:.4f}".format(
+                            *losses
+                        )
 
-                    with open(os.path.join(train_log_path, "log.txt"), "a") as f:
-                        f.write(message1 + message2 + "\n")
+                        with open(os.path.join(train_log_path, "log.txt"), "a") as f:
+                            f.write(message1 + message2 + "\n")
 
-                    outer_bar.write(message1 + message2)
+                        outer_bar.write(message1 + message2)
 
-                    log(train_logger, step, losses=losses)
+                        log(train_logger, step, losses=losses)
 
-                if step % synth_step == 0:
-                    fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
-                        ids=ids,
-                        duration_targets=durations,
-                        pitch_targets=avg_pitches,
-                        mel_targets=mels,
-                        mel_predictions=postnet_outputs,
-                        phoneme_lens=phoneme_lens,
-                        mel_lens=mel_lens,
-                        vocoder=vocoder,
-                        config=config
-                    )
-                    log(
-                        train_logger,
-                        fig=fig,
-                        tag="Training/step_{}_{}".format(step, tag),
-                    )
-                    sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
-                    log(
-                        train_logger,
-                        audio=wav_reconstruction,
-                        sampling_rate=sampling_rate,
-                        tag="Training/step_{}_{}_reconstructed".format(step, tag),
-                    )
-                    log(
-                        train_logger,
-                        audio=wav_prediction,
-                        sampling_rate=sampling_rate,
-                        tag="Training/step_{}_{}_synthesized".format(step, tag),
-                    )
+                    if step % synth_step == 0:
+                        fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
+                            ids=ids,
+                            duration_targets=durations,
+                            pitch_targets=avg_pitches,
+                            mel_targets=mels,
+                            mel_predictions=postnet_outputs,
+                            phoneme_lens=phoneme_lens,
+                            mel_lens=mel_lens,
+                            vocoder=vocoder,
+                            config=config
+                        )
+                        log(
+                            train_logger,
+                            fig=fig,
+                            tag="Training/step_{}_{}".format(step, tag),
+                        )
+                        sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
+                        log(
+                            train_logger,
+                            audio=wav_reconstruction,
+                            sampling_rate=sampling_rate,
+                            tag="Training/step_{}_{}_reconstructed".format(step, tag),
+                        )
+                        log(
+                            train_logger,
+                            audio=wav_prediction,
+                            sampling_rate=sampling_rate,
+                            tag="Training/step_{}_{}_synthesized".format(step, tag),
+                        )
 
-                if step % val_step == 0:
-                    variance_model.eval()
-                    embedder_model.eval()
-                    decoder_model.eval()
-                    extractor_model.eval()
-                    message = evaluate(
-                        variance_model, embedder_model, decoder_model, extractor_model, length_regulator, step, config, val_logger, vocoder
-                    )
-                    with open(os.path.join(val_log_path, "log.txt"), "a") as f:
-                        f.write(message + "\n")
-                    outer_bar.write(message)
+                    if step % val_step == 0:
+                        variance_model.eval()
+                        embedder_model.eval()
+                        decoder_model.eval()
+                        extractor_model.eval()
+                        message = evaluate(
+                            variance_model, embedder_model, decoder_model, extractor_model, length_regulator, step, config, val_logger, vocoder
+                        )
+                        with open(os.path.join(val_log_path, "log.txt"), "a") as f:
+                            f.write(message + "\n")
+                        outer_bar.write(message)
 
-                    variance_model.train()
-                    embedder_model.train()
-                    decoder_model.train()
-                    extractor_model.train()
+                        variance_model.train()
+                        embedder_model.train()
+                        decoder_model.train()
+                        extractor_model.train()
 
-                if step % save_step == 0:
-                    torch.save(
-                        {
-                            "variance_model": variance_model.module.state_dict(),
-                            "embedder_model": embedder_model.module.state_dict(),
-                            "decoder_model": decoder_model.module.state_dict(),
-                            "extractor_model": extractor_model.module.state_dict(),
-                            "optimizer": {
-                                "variance": optimizer._variance_optimizer.state_dict(),
-                                "embedder": optimizer._embedder_optimizer.state_dict(),
-                                "decoder": optimizer._decoder_optimizer.state_dict(),
-                                "extractor": optimizer._extractor_optimizer.state_dict(),
+                    if step % save_step == 0:
+                        torch.save(
+                            {
+                                "variance_model": (variance_model.module if num_gpus > 1 else variance_model).state_dict(),
+                                "embedder_model": (embedder_model.module if num_gpus > 1 else embedder_model).state_dict(),
+                                "decoder_model": (decoder_model.module if num_gpus > 1 else decoder_model).state_dict(),
+                                "extractor_model": (extractor_model.module if num_gpus > 1 else extractor_model).state_dict(),
+                                "optimizer": {
+                                    "variance": optimizer._variance_optimizer.state_dict(),
+                                    "embedder": optimizer._embedder_optimizer.state_dict(),
+                                    "decoder": optimizer._decoder_optimizer.state_dict(),
+                                    "extractor": optimizer._extractor_optimizer.state_dict(),
+                                },
                             },
-                        },
-                        os.path.join(
-                            config["train"]["path"]["ckpt_path"],
-                            "{}.pth.tar".format(step),
-                        ),
-                    )
+                            os.path.join(
+                                config["train"]["path"]["ckpt_path"],
+                                "{:08d}.pth.tar".format(step),
+                            ),
+                        )
 
                 if step == total_step:
                     quit()
                 step += 1
-                outer_bar.update(1)
 
-            inner_bar.update(1)
+                if rank == 0:
+                    outer_bar.update()
+
+            if rank == 0:
+                inner_bar.update()
         epoch += 1
 
 
@@ -415,4 +449,19 @@ if __name__ == '__main__':
         open(args.config, "r"), Loader=yaml.FullLoader
     )
 
-    main(args.restore_step, args.speaker_num, config)
+    num_gpus = 0
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        batch_size = config["train"]["optimizer"]["batch_size"]
+        config["train"]["optimizer"]["batch_size"] = int(batch_size / num_gpus)
+        print('Batch size per GPU :', config["train"]["optimizer"]["batch_size"])
+    else:
+        raise Exception("cuda is not available")
+
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '54321'
+
+    if num_gpus > 1:
+        mp.spawn(main, nprocs=num_gpus, args=(args.restore_step, args.speaker_num, config, num_gpus,))
+    else:
+        main(0, args.restore_step, args.speaker_num, config, num_gpus)
