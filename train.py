@@ -216,7 +216,6 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
         embedder_model = DistributedDataParallel(embedder_model, device_ids=[rank]).to(device)
         decoder_model = DistributedDataParallel(decoder_model, device_ids=[rank]).to(device)
         extractor_model = DistributedDataParallel(extractor_model, device_ids=[rank]).to(device)
-        length_regulator = DistributedDataParallel(length_regulator, device_ids=[rank]).to(device)
 
     num_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model)
     Loss = FastSpeech2Loss().to(device)
