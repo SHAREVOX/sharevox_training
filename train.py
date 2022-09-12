@@ -458,6 +458,9 @@ if __name__ == '__main__':
     else:
         raise Exception("cuda is not available")
 
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '54321'
+
     if num_gpus > 1:
         mp.spawn(main, nprocs=num_gpus, args=(args.restore_step, args.speaker_num, config, num_gpus,))
     else:
