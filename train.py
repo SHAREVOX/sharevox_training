@@ -174,7 +174,8 @@ def evaluate(
 
 
 def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: int):
-    print("Prepare training ...")
+    if rank == 0:
+        print("Prepare training ...")
     if num_gpus > 1:
         init_process_group(backend="nccl", init_method="env://",
                            world_size=num_gpus, rank=rank)
