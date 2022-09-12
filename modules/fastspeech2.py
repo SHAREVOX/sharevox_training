@@ -92,7 +92,7 @@ class PitchAndDurationPredictor(BaseModule):
     ):
         # forward encoder
         if phoneme_lens is None:
-            x_masks = torch.ones_like(phonemes).squeeze()
+            x_masks = torch.ones_like(phonemes).squeeze(0)
         else:
             # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
             x_masks = self.source_mask(phoneme_lens)
@@ -238,7 +238,7 @@ class FeatureEmbedder(BaseModule):
             feature_embeded (Tensor): Feature embedded tensor
         """
         if phoneme_lens is None:
-            x_masks = torch.ones_like(phonemes).squeeze()
+            x_masks = torch.ones_like(phonemes).squeeze(0)
         else:
             x_masks = self.source_mask(phoneme_lens)  # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
 
