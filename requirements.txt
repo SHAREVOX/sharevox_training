@@ -1,0 +1,14 @@
+# torch
+# torchvision
+# torchaudio
+numpy
+numba
+torchtyping
+tqdm
+scipy
+sklearn
+librosa
+pyyaml
+pyworld
+pyopenjtalk
+onnxruntime
