@@ -45,7 +45,7 @@ def evaluate(
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=lambda x: [to_device(d, device) for d in dataset.collate_fn(x)],
+        collate_fn=dataset.collate_fn,
     )
 
     # Get loss function
@@ -55,8 +55,8 @@ def evaluate(
     loss_sums = [0 for _ in range(6)]
     count = 0
     for batchs in loader:
-        for batch in batchs:
-            batch: ReProcessedItemTorch
+        for _batch in batchs:
+            batch: ReProcessedItemTorch = to_device(_batch, device)
             (
                 ids,
                 speakers,
@@ -204,7 +204,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
         sampler=sampler,
         pin_memory=True,
         drop_last=True,
-        collate_fn=lambda x: [to_device(d, device) for d in dataset.collate_fn(x)],
+        collate_fn=dataset.collate_fn,
     )
 
     # Prepare model
@@ -259,8 +259,8 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
             sampler.set_epoch(epoch)
 
         for batchs in loader:
-            for batch in batchs:
-                batch: ReProcessedItemTorch
+            for _batch in batchs:
+                batch: ReProcessedItemTorch = to_device(_batch, device)
                 (
                     ids,
                     speakers,
