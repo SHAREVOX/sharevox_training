@@ -3,11 +3,11 @@ import os
 from typing import Optional, Union, Tuple, TypedDict, Literal, overload
 
 import torch
-from torch import nn, device as TorchDevice
+from torch import nn
 
 from dataset import TrainConfig
-from modules.fastspeech2 import PitchAndDurationPredictor, PitchAndDurationExtractor, MelSpectrogramDecoder, \
-    ModelConfig, FeatureEmbedder, VocoderType, VocoderGenerator
+from modules.jets import PitchAndDurationPredictor, PitchAndDurationExtractor, MelSpectrogramDecoder, \
+    ModelConfig, FeatureEmbedder, VocoderGenerator, VocoderMultiPeriodDiscriminator, VocoderMultiScaleDiscriminator
 from modules.optimizer import ScheduledOptim
 from preprocessor import PreProcessConfig
 
@@ -25,7 +25,16 @@ def get_model(
     device: torch.device,
     speaker_num: int,
     train: True,
-) -> Tuple[PitchAndDurationPredictor, FeatureEmbedder, MelSpectrogramDecoder, PitchAndDurationExtractor, ScheduledOptim]:
+) -> Tuple[
+    PitchAndDurationPredictor,
+    FeatureEmbedder,
+    MelSpectrogramDecoder,
+    PitchAndDurationExtractor,
+    VocoderGenerator,
+    VocoderMultiPeriodDiscriminator,
+    VocoderMultiScaleDiscriminator,
+    ScheduledOptim
+]:
     pass
 
 
@@ -36,7 +45,16 @@ def get_model(
     device: torch.device,
     speaker_num: int,
     train: False,
-) -> Tuple[PitchAndDurationPredictor, FeatureEmbedder, MelSpectrogramDecoder, PitchAndDurationExtractor, None]:
+) -> Tuple[
+    PitchAndDurationPredictor,
+    FeatureEmbedder,
+    MelSpectrogramDecoder,
+    PitchAndDurationExtractor,
+    VocoderGenerator,
+    None,
+    None,
+    None
+]:
     pass
 
 
@@ -56,6 +74,23 @@ def get_model(
     embedder_model = FeatureEmbedder(config["model"], speaker_num, pitch_min, pitch_max).to(device)
     decoder_model = MelSpectrogramDecoder(config["model"]).to(device)
     extractor_model = PitchAndDurationExtractor(config["model"]).to(device)
+    vocoder_type = config["model"]["vocoder_type"]
+    if vocoder_type == "fregan":
+        import fregan
+        generator_model = fregan.Generator(config["model"]["vocoder"])
+        mpd_model = fregan.ResWiseMultiPeriodDiscriminator()
+        msd_model = fregan.ResWiseMultiScaleDiscriminator()
+    elif vocoder_type == "hifigan":
+        import hifigan
+        generator_model = hifigan.Generator(config["model"]["vocoder"])
+        mpd_model = hifigan.MultiPeriodDiscriminator()
+        msd_model = hifigan.MultiScaleDiscriminator()
+    else:
+        raise Exception(f"Unsupported vocoder: {vocoder_type}")
+    generator_model.to(device)
+    mpd_model.to(device)
+    msd_model.to(device)
+
     if restore_step:
         ckpt_path = os.path.join(
             config["train"]["path"]["ckpt_path"],
@@ -66,10 +101,22 @@ def get_model(
         embedder_model.load_state_dict(ckpt["embedder_model"])
         decoder_model.load_state_dict(ckpt["decoder_model"])
         extractor_model.load_state_dict(ckpt["extractor_model"])
+        generator_model.load_state_dict(ckpt["generator_model"])
+        mpd_model.load_state_dict(ckpt["mpd_model"])
+        msd_model.load_state_dict(ckpt["msd_model"])
 
     if train:
         scheduled_optim = ScheduledOptim(
-            variance_model, embedder_model, decoder_model, extractor_model, config["train"], config["model"], restore_step
+            variance_model,
+            embedder_model,
+            decoder_model,
+            extractor_model,
+            generator_model,
+            mpd_model,
+            msd_model,
+            config["train"],
+            config["model"],
+            restore_step
         )
         if restore_step:
             scheduled_optim.load_state_dict(ckpt["optimizer"])
@@ -77,41 +124,23 @@ def get_model(
         embedder_model.train()
         decoder_model.train()
         extractor_model.train()
-        return variance_model, embedder_model, decoder_model, extractor_model, scheduled_optim
+        generator_model.train()
+        mpd_model.train()
+        msd_model.train()
+        return variance_model, embedder_model, decoder_model, extractor_model, generator_model, mpd_model, msd_model, scheduled_optim
 
     variance_model.eval()
     embedder_model.eval()
     decoder_model.eval()
     extractor_model.eval()
+    generator_model.eval()
     variance_model.requires_grad_ = False
     embedder_model.requires_grad_ = False
     decoder_model.requires_grad_ = False
-    return variance_model, embedder_model, decoder_model, extractor_model, None
+    generator_model.requires_grad_ = False
+    return variance_model, embedder_model, decoder_model, extractor_model, generator_model, None, None, None
 
 
 def get_param_num(model: nn.Module) -> int:
     num_param = sum(param.numel() for param in model.parameters())
     return num_param
-
-
-def get_vocoder(device: TorchDevice, type: VocoderType = "fregan") -> VocoderGenerator:
-    if type == "fregan":
-        import fregan
-        config = fregan.Config()
-        vocoder = fregan.Generator(config)
-        ckpt = torch.load(f"fregan/g_0003000.pth.tar", map_location=device)
-        vocoder.load_state_dict(ckpt["generator"])
-        vocoder.eval()
-        vocoder.remove_weight_norm()
-    elif type == "hifigan":
-        import hifigan
-        config = hifigan.Config()
-        vocoder = hifigan.Generator(config)
-        ckpt = torch.load(f"hifigan/g_00445000", map_location=device)
-        vocoder.load_state_dict(ckpt["generator"])
-        vocoder.eval()
-        vocoder.remove_weight_norm()
-    else:
-        raise Exception(f"Unsupported vocoder: {type}")
-    vocoder.to(device)
-    return vocoder

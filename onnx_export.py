@@ -10,9 +10,9 @@ import yaml
 from torch import nn, Tensor, LongTensor
 
 from fregan import Generator
-from modules.fastspeech2 import MelSpectrogramDecoder, PitchAndDurationPredictor, FeatureEmbedder, VocoderGenerator
+from modules.jets import MelSpectrogramDecoder, PitchAndDurationPredictor, FeatureEmbedder, VocoderGenerator
 from text import phoneme_to_id, accent_to_id
-from utils.model import Config, get_model, get_vocoder
+from utils.model import Config, get_model
 
 from torch.onnx.symbolic_registry import _onnx_stable_opsets
 
@@ -66,17 +66,16 @@ class Embedder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, config: Config, decoder: MelSpectrogramDecoder, vocoder: VocoderGenerator):
+    def __init__(self, config: Config, decoder: MelSpectrogramDecoder, generator_model: VocoderGenerator):
         super(Decoder, self).__init__()
 
         self.max_wav_value = config["preprocess"]["audio"]["max_wav_value"]
         self.decoder = decoder
-        self.vocoder_type = config["model"]["vocoder_type"]
-        self.vocoder = vocoder
+        self.generator_model = generator_model
 
     def forward(self, length_regulated_tensor: Tensor) -> Tensor:
         _, postnet_outputs = self.decoder(length_regulated_tensor)
-        wavs = self.vocoder(postnet_outputs[0].transpose(0, 1).unsqueeze(0)).squeeze(1)
+        wavs = self.generator_model(postnet_outputs.transpose(1, 2)).squeeze(1)
         return wavs
 
 
@@ -126,10 +125,9 @@ if __name__ == '__main__':
         open(args.config, "r"), Loader=yaml.FullLoader
     )
 
-    variance_model, embedder_model, decoder_model, _, _ = get_model(args.restore_step, config, device, args.speaker_num, False)
+    variance_model, embedder_model, decoder_model, _, generator_model, _, _, _ = get_model(args.restore_step, config, device, args.speaker_num, False)
     gaussian_model = GaussianUpsampling()
     gaussian_model = gaussian_model.eval()
-    fregan_model = get_vocoder(device, config["model"]["vocoder_type"])
     with open(
         os.path.join(config["preprocess"]["path"]["preprocessed_path"], "stats.json")
     ) as f:
@@ -138,7 +136,7 @@ if __name__ == '__main__':
         pitch_mean, pitch_std = pitch_data[2], pitch_data[3]
     variance_model = Variance(config, variance_model, pitch_mean, pitch_std)
     embedder_model = Embedder(config, embedder_model, pitch_mean, pitch_std)
-    decoder_model = Decoder(config, decoder_model, fregan_model)
+    decoder_model = Decoder(config, decoder_model, generator_model)
     decoder_model.eval()
     decoder_model.requires_grad_ = False
 

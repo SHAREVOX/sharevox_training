@@ -90,6 +90,7 @@ class Preprocessor:
         )
 
     def build_from_path(self) -> List[str]:
+        os.makedirs((os.path.join(self.out_dir, "wav")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "mel")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "pitch")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "accent")), exist_ok=True)
@@ -205,6 +206,9 @@ class Preprocessor:
         assert pitch.size == mel_spectrogram.shape[1], "pitch length != mel spec length"
 
         # Save files
+        wav_filename = "{}-wav-{}.npy".format(speaker, basename)
+        np.save(os.path.join(self.out_dir, "wav", wav_filename), wav)
+
         pitch_filename = "{}-pitch-{}.npy".format(speaker, basename)
         np.save(os.path.join(self.out_dir, "pitch", pitch_filename), pitch)
 

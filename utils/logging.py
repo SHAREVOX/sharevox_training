@@ -1,28 +1,34 @@
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence, Union, TypedDict
 
 import numpy as np
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 
+LossValue = Union[Tensor, np.ndarray, float]
+
+
+class LossDict(TypedDict):
+    total_loss: LossValue
+    mel_loss: LossValue
+    duration_loss: LossValue
+    pitch_loss: LossValue
+    alignment_loss: LossValue
+    generator_loss: Optional[LossValue]
+    discriminator_loss: Optional[LossValue]
+
 
 def log(
     logger: SummaryWriter,
     step: Optional[int] = None,
-    losses: Optional[Sequence[Union[Tensor, np.ndarray, float]]] = None,
+    loss_dict: Optional[LossDict] = None,
     fig: Optional[plt.Figure] = None,
     audio: Optional[np.ndarray] = None,
     sampling_rate: int = 48000,
     tag: str = ""
 ):
-    if losses is not None:
-        logger.add_scalar("Loss/total_loss", losses[0], step)
-        logger.add_scalar("Loss/mel_loss", losses[1], step)
-        logger.add_scalar("Loss/mel_postnet_loss", losses[2], step)
-        logger.add_scalar("Loss/duration_loss", losses[3], step)
-        logger.add_scalar("Loss/pitch_loss", losses[4], step)
-        logger.add_scalar("Loss/alignment_loss", losses[5], step)
-
+    if loss_dict is not None:
+        logger.add_scalars("Loss", loss_dict, step)
     if fig is not None:
         logger.add_figure(tag, fig, step)
 

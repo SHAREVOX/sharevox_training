@@ -49,6 +49,7 @@ class DatasetItem(TypedDict):
     speaker: int
     text: np.ndarray
     accent: np.ndarray
+    wav: np.ndarray
     mel: np.ndarray
     pitch: np.ndarray
 
@@ -59,6 +60,7 @@ ReProcessedItem = Tuple[
     np.ndarray,
     np.ndarray,
     np.int64,
+    np.ndarray,
     np.ndarray,
     np.ndarray,
     np.ndarray,
@@ -111,6 +113,12 @@ class Dataset(TorchDataset):
             "{}-accent-{}.npy".format(speaker, basename),
         )
         accent = np.load(accent_path)[:len(phone) + 1]
+        wav_path = os.path.join(
+            self.preprocessed_path,
+            "wav",
+            "{}-wav-{}.npy".format(speaker, basename),
+        )
+        wav = np.load(wav_path)
         mel_path = os.path.join(
             self.preprocessed_path,
             "mel",
@@ -129,6 +137,7 @@ class Dataset(TorchDataset):
             speaker=speaker_id,
             text=phone,
             accent=accent,
+            wav=wav,
             mel=mel,
             pitch=pitch,
         )
@@ -156,6 +165,7 @@ class Dataset(TorchDataset):
         speakers = [data[idx]["speaker"] for idx in idxs]
         texts = [data[idx]["text"] for idx in idxs]
         accents = [data[idx]["accent"] for idx in idxs]
+        wavs = [data[idx]["wav"] for idx in idxs]
         mels = [data[idx]["mel"] for idx in idxs]
         pitches = [data[idx]["pitch"] for idx in idxs]
 
@@ -165,6 +175,7 @@ class Dataset(TorchDataset):
         speakers = np.array(speakers)
         texts = pad_1D(texts)
         accents = pad_1D(accents)
+        wavs = pad_1D(wavs)
         mels = pad_2D(mels)
         pitches = pad_1D(pitches)
 
@@ -178,6 +189,7 @@ class Dataset(TorchDataset):
             text_lens,
             max_text_len,
             accents,
+            wavs,
             mels,
             mel_lens,
             max_mel_len,

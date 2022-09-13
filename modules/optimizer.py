@@ -1,8 +1,11 @@
+import itertools
+
 import torch
 import numpy as np
 
 from dataset import TrainConfig
-from modules.fastspeech2 import PitchAndDurationPredictor, PitchAndDurationExtractor, MelSpectrogramDecoder, ModelConfig, FeatureEmbedder
+from modules.jets import PitchAndDurationPredictor, PitchAndDurationExtractor, MelSpectrogramDecoder, \
+    ModelConfig, FeatureEmbedder, VocoderGenerator, VocoderMultiPeriodDiscriminator, VocoderMultiScaleDiscriminator
 
 
 class ScheduledOptim:
@@ -14,6 +17,9 @@ class ScheduledOptim:
         embedder_model: FeatureEmbedder,
         decoder_model: MelSpectrogramDecoder,
         extractor_model: PitchAndDurationExtractor,
+        generator_model: VocoderGenerator,
+        mpd_model: VocoderMultiPeriodDiscriminator,
+        msd_model: VocoderMultiScaleDiscriminator,
         train_config: TrainConfig,
         model_config: ModelConfig,
         current_step: int
@@ -43,6 +49,18 @@ class ScheduledOptim:
             eps=train_config["optimizer"]["eps"],
             weight_decay=train_config["optimizer"]["weight_decay"],
         )
+        self._generator_optimizer = torch.optim.Adam(
+            generator_model.parameters(),
+            betas=train_config["optimizer"]["betas"],
+            eps=train_config["optimizer"]["eps"],
+            weight_decay=train_config["optimizer"]["weight_decay"],
+        )
+        self._discriminator_optimizer = torch.optim.Adam(
+            itertools.chain(msd_model.parameters(), mpd_model.parameters()),
+            betas=train_config["optimizer"]["betas"],
+            eps=train_config["optimizer"]["eps"],
+            weight_decay=train_config["optimizer"]["weight_decay"],
+        )
 
         self.n_warmup_steps = train_config["optimizer"]["warm_up_step"]
         self.anneal_steps = train_config["optimizer"]["anneal_steps"]
@@ -56,6 +74,8 @@ class ScheduledOptim:
         self._embedder_optimizer.step()
         self._decoder_optimizer.step()
         self._extractor_optimizer.step()
+        self._generator_optimizer.step()
+        self._discriminator_optimizer.step()
 
     def zero_grad(self) -> None:
         # print(self.init_lr)
@@ -63,12 +83,16 @@ class ScheduledOptim:
         self._embedder_optimizer.zero_grad()
         self._decoder_optimizer.zero_grad()
         self._extractor_optimizer.zero_grad()
+        self._generator_optimizer.zero_grad()
+        self._discriminator_optimizer.zero_grad()
 
     def load_state_dict(self, path: dict) -> None:
         self._variance_optimizer.load_state_dict(path["variance"])
         self._embedder_optimizer.load_state_dict(path["embedder"])
         self._decoder_optimizer.load_state_dict(path["decoder"])
         self._extractor_optimizer.load_state_dict(path["extractor"])
+        self._generator_optimizer.load_state_dict(path["generator"])
+        self._discriminator_optimizer.load_state_dict(path["discriminator"])
 
     def _get_lr_scale(self) -> None:
         lr = np.min(
@@ -95,3 +119,8 @@ class ScheduledOptim:
             param_group["lr"] = lr
         for param_group in self._extractor_optimizer.param_groups:
             param_group["lr"] = lr
+        for param_group in self._generator_optimizer.param_groups:
+            param_group["lr"] = lr
+        for param_group in self._discriminator_optimizer.param_groups:
+            param_group["lr"] = lr
+

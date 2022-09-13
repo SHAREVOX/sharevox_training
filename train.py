@@ -3,6 +3,7 @@ import os
 
 import torch
 import torch.multiprocessing as mp
+import torch.nn.functional as F
 import yaml
 from torch import nn
 from torch.distributed import init_process_group
@@ -11,14 +12,15 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-import fregan
 from dataset import Dataset
 from modules.gaussian_upsampling import GaussianUpsampling
-from modules.loss import FastSpeech2Loss
-from utils.logging import log
+from modules.loss import VarianceLoss, DiscriminatorLoss, GeneratorLoss
+from stft import TacotronSTFT
+from utils.logging import log, LossDict
 from utils.mask import make_non_pad_mask
-from utils.model import Config, get_model, get_param_num, get_vocoder
-from utils.synth import synth_one_sample
+from utils.model import Config, get_model, get_param_num
+from utils.plot import plot_one_sample
+from utils.random_segments import get_random_segments, get_segments
 from utils.tools import to_device, ReProcessedItemTorch
 
 torch.backends.cudnn.benchmark = True
@@ -29,11 +31,11 @@ def evaluate(
     embedder_model: nn.Module,  # FeatureEmbedder
     decoder_model: nn.Module,  # MelSpectrogramDecoder
     extractor_model: nn.Module,  # PitchAndDurationExtractor
+    generator_model: nn.Module,  # {FreGAN|HifiGAN}Generator
     length_regulator: nn.Module,
     step: int,
     config: Config,
     logger: SummaryWriter,
-    vocoder: fregan.Generator = None,
 ):
     # Get dataset
     dataset = Dataset(
@@ -48,11 +50,31 @@ def evaluate(
         collate_fn=dataset.collate_fn,
     )
 
+    preprocess_config = config["preprocess"]
+    stft_module = TacotronSTFT(
+        preprocess_config["stft"]["filter_length"],
+        preprocess_config["stft"]["hop_length"],
+        preprocess_config["stft"]["win_length"],
+        preprocess_config["mel"]["n_mel_channels"],
+        preprocess_config["audio"]["sampling_rate"],
+        preprocess_config["mel"]["mel_fmin"],
+        preprocess_config["mel"]["mel_fmax"],
+    )
+
     # Get loss function
-    Loss = FastSpeech2Loss().to(device)
+    variance_loss = VarianceLoss().to(device)
 
     # Evaluation
-    loss_sums = [0 for _ in range(6)]
+    loss_dict: LossDict = {
+        "total_loss": 0.0,
+        "mel_loss": 0.0,
+        "duration_loss": 0.0,
+        "pitch_loss": 0.0,
+        "alignment_loss": 0.0,
+        "generator_loss": None,
+        "discriminator_loss": None
+    }
+
     count = 0
     for batchs in loader:
         for _batch in batchs:
@@ -64,6 +86,7 @@ def evaluate(
                 phoneme_lens,
                 max_phoneme_len,
                 accents,
+                wavs,
                 mels,
                 mel_lens,
                 max_mel_len,
@@ -99,46 +122,49 @@ def evaluate(
                     h_masks=h_masks,
                     d_masks=d_masks,
                 )
-                outputs, postnet_outputs = decoder_model(
+                outputs, _ = decoder_model(
                     length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
+                wav_outputs = generator_model(outputs)
+                mel_from_outputs = stft_module.mel_spectrogram(wav_outputs.squeeze(1))
 
                 # Cal Loss
-                losses = Loss(
-                    outputs=outputs,
-                    postnet_outputs=postnet_outputs,
+                variance_loss_all, duration_loss, pitch_loss, align_loss = variance_loss(
                     log_duration_outputs=log_duration_outputs,
                     pitch_outputs=pitch_outputs,
-                    mel_targets=mels,
                     duration_targets=durations,
                     pitch_targets=avg_pitches,
                     log_p_attn=log_p_attn,
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                # align loss
-                losses = list(losses)
-                losses[5] = losses[5] + bin_loss
+                mel_loss = F.l1_loss(mels, mel_from_outputs)
 
-                # total loss
-                losses[0] = losses[0] + bin_loss
+                align_loss += bin_loss
 
-                for i in range(len(losses)):
-                    loss_sums[i] += losses[i].item() * len(batch[0])
+                total_loss = variance_loss_all + bin_loss + (mel_loss * 45)
+
+                loss_dict["total_loss"] = total_loss
+                loss_dict["mel_loss"] = mel_loss
+                loss_dict["duration_loss"] = duration_loss
+                loss_dict["pitch_loss"] = pitch_loss
+                loss_dict["alignment_loss"] = align_loss
+
+                for key in loss_dict.keys():
+                    loss_value = loss_dict[key]
+                    if loss_value is not None:
+                        loss_dict[key] += loss_dict[key].item() * len(batch[0])
 
             if count < 5:
-                fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
+                fig, tag = plot_one_sample(
                     ids=ids,
                     duration_targets=durations,
                     pitch_targets=avg_pitches,
                     mel_targets=mels,
-                    mel_predictions=postnet_outputs,
+                    mel_predictions=mel_from_outputs,
                     phoneme_lens=phoneme_lens,
-                    mel_lens=mel_lens,
-                    vocoder=vocoder,
-                    config=config,
-                    synthesis_target=(step == int(config["train"]["step"]["val_step"]))
+                    mel_lens=mel_lens
                 )
 
                 log(
@@ -150,27 +176,38 @@ def evaluate(
                 sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
                 log(
                     logger,
-                    audio=wav_reconstruction,
+                    audio=wavs[0],
                     sampling_rate=sampling_rate,
                     tag="Validation/{}_gt".format(tag),
                 )
                 log(
                     logger,
-                    audio=wav_prediction,
+                    audio=wav_outputs[0],
                     sampling_rate=sampling_rate,
                     tag="Validation/{}_synthesized".format(tag),
                     step=step,
                 )
             count += 1
 
-    loss_means = [loss_sum / len(dataset) for loss_sum in loss_sums]
-    log(logger, step, losses=loss_means)
+    for key in loss_dict.keys():
+        loss_value = loss_dict[key]
+        if loss_value is not None:
+            loss_dict[key] = loss_dict[key] /len(dataset)
 
-    message = "Validation Step {}, Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}, Alignment Loss: {:.4f}".format(
-        *([step] + loss_means)
+    log(logger, step, loss_dict=loss_dict)
+
+    message1 = "Validation Step {}, ".format(step)
+    message2 = (
+            "Total Loss: {total_loss:.4f}, " +
+            "Mel Loss: {mel_loss:.4f}, " +
+            "Duration Loss: {duration_loss:.4f}, " +
+            "Pitch Loss: {pitch_loss:.4f}, " +
+            "Alignment Loss: {alignment_loss:.4f}"
+    ).format(
+        loss_dict
     )
 
-    return message
+    return message1 + message2
 
 
 def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: int):
@@ -209,21 +246,37 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
     )
 
     # Prepare model
-    variance_model, embedder_model, decoder_model, extractor_model, optimizer = get_model(restore_step, config, device, speaker_num, train=True)
+    variance_model, embedder_model, decoder_model, extractor_model, generator_model, mpd_model, msd_model, optimizer = \
+        get_model(restore_step, config, device, speaker_num, train=True)
     length_regulator = GaussianUpsampling().to(device)
+    preprocess_config = config["preprocess"]
+    stft_module = TacotronSTFT(
+        preprocess_config["stft"]["filter_length"],
+        preprocess_config["stft"]["hop_length"],
+        preprocess_config["stft"]["win_length"],
+        preprocess_config["mel"]["n_mel_channels"],
+        preprocess_config["audio"]["sampling_rate"],
+        preprocess_config["mel"]["mel_fmin"],
+        preprocess_config["mel"]["mel_fmax"],
+    )
     if num_gpus > 1:
         variance_model = DistributedDataParallel(variance_model, device_ids=[rank]).to(device)
         embedder_model = DistributedDataParallel(embedder_model, device_ids=[rank]).to(device)
         decoder_model = DistributedDataParallel(decoder_model, device_ids=[rank]).to(device)
         extractor_model = DistributedDataParallel(extractor_model, device_ids=[rank]).to(device)
+        generator_model = DistributedDataParallel(generator_model, device_ids=[rank]).to(device)
+        mpd_model = DistributedDataParallel(mpd_model, device_ids=[rank]).to(device)
+        msd_model = DistributedDataParallel(msd_model, device_ids=[rank]).to(device)
 
-    num_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model)
-    Loss = FastSpeech2Loss().to(device)
+    num_generate_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model) + get_param_num(generator_model)
+    num_discriminate_param = get_param_num(mpd_model) + get_param_num(msd_model)
+    variance_loss = VarianceLoss().to(device)
+    generator_loss = GeneratorLoss().to(device)
+    discriminator_loss = DiscriminatorLoss().to(device)
+
     if rank == 0:
-        print("Number of FastSpeech2 Parameters:", num_param)
-
-    # Load vocoder
-    vocoder = get_vocoder(device, config["model"]["vocoder_type"])
+        print("Number of JETS Generator Parameters:", num_generate_param)
+        print("Number of JETS Discriminator Parameters:", num_discriminate_param)
 
     # Init logger
     for p in config["train"]["path"].values():
@@ -245,6 +298,9 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
     save_step = config["train"]["step"]["save_step"]
     synth_step = config["train"]["step"]["synth_step"]
     val_step = config["train"]["step"]["val_step"]
+
+    segment_size = config["model"]["vocoder"]["segment_size"]
+    hop_length = config["preprocess"]["stft"]["hop_length"]
 
     if rank == 0:
         outer_bar = tqdm(total=total_step, desc="Training", position=0)
@@ -268,6 +324,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     phoneme_lens,
                     max_phoneme_len,
                     accents,
+                    wavs,
                     mels,
                     mel_lens,
                     max_mel_len,
@@ -304,29 +361,53 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     h_masks=h_masks,
                     d_masks=d_masks,
                 )
-                outputs, postnet_outputs = decoder_model(
+                # TODO: Postnetを使ったらどうなるか
+                outputs, _ = decoder_model(
                     length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
 
-                # Cal Loss
-                losses = Loss(
-                    outputs=outputs,
-                    postnet_outputs=postnet_outputs,
+                segmented_outputs, start_idxs = get_random_segments(outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
+                segumented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
+
+                wav_outputs = generator_model(segmented_outputs)
+                mel_from_outputs = stft_module.mel_spectrogram(wav_outputs.squeeze(1))
+                segumented_mels = stft_module.mel_spectrogram(segumented_wavs.squeeze(1))
+
+                y_df_hat_r, y_df_hat_g, _, _ = mpd_model(segumented_wavs, wav_outputs.detach())
+                y_ds_hat_r, y_ds_hat_g, _, _ = msd_model(segumented_wavs, wav_outputs.detach())
+
+                # Discriminator Loss
+                loss_disc_all, loss_disc_s, loss_disc_f = discriminator_loss(y_df_hat_r, y_df_hat_g, y_ds_hat_r, y_ds_hat_g)
+                loss_disc_all /= grad_acc_step
+                loss_disc_all.backward()
+
+                # Variance & Generator Loss
+                variance_loss_all, duration_loss, pitch_loss, align_loss = variance_loss(
                     log_duration_outputs=log_duration_outputs,
                     pitch_outputs=pitch_outputs,
-                    mel_targets=mels,
                     duration_targets=durations,
                     pitch_targets=avg_pitches,
                     log_p_attn=log_p_attn,
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                losses = list(losses)
-                # align loss
-                losses[5] = losses[5] + bin_loss
+                _, y_df_hat_g, fmap_f_r, fmap_f_g = mpd_model(segumented_wavs, wav_outputs)
+                _, y_ds_hat_g, fmap_s_r, fmap_s_g = msd_model(segumented_wavs, wav_outputs)
+                loss_gen_all, loss_gen_s, loss_gen_f, loss_fm_s, loss_fm_f, loss_mel = generator_loss(
+                    mels=segumented_mels,
+                    mel_from_outputs=mel_from_outputs,
+                    y_df_hat_g=y_df_hat_g,
+                    fmap_f_r=fmap_f_r,
+                    fmap_f_g=fmap_f_g,
+                    y_ds_hat_g=y_ds_hat_g,
+                    fmap_s_r=fmap_s_r,
+                    fmap_s_g=fmap_s_g,
+                )
 
-                total_loss = losses[0] + bin_loss
+                align_loss += bin_loss
+
+                total_loss = variance_loss_all + bin_loss + loss_gen_all
 
                 # Backward
                 total_loss = total_loss / grad_acc_step
@@ -338,6 +419,9 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     nn.utils.clip_grad_norm_(embedder_model.parameters(), grad_clip_thresh)
                     nn.utils.clip_grad_norm_(decoder_model.parameters(), grad_clip_thresh)
                     nn.utils.clip_grad_norm_(extractor_model.parameters(), grad_clip_thresh)
+                    nn.utils.clip_grad_norm_(generator_model.parameters(), grad_clip_thresh)
+                    nn.utils.clip_grad_norm_(mpd_model.parameters(), grad_clip_thresh)
+                    nn.utils.clip_grad_norm_(msd_model.parameters(), grad_clip_thresh)
 
                     # Update weights
                     optimizer.step_and_update_lr()
@@ -345,10 +429,26 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                 if rank == 0:
                     if step % log_step == 0:
-                        losses = [l.item() for l in losses]
+                        loss_dict: LossDict = {
+                            "total_loss": total_loss + loss_disc_all,
+                            "mel_loss": loss_mel,
+                            "duration_loss": duration_loss,
+                            "pitch_loss": pitch_loss,
+                            "alignment_loss": align_loss,
+                            "generator_loss": loss_gen_all,
+                            "discriminator_loss": loss_disc_all
+                        }
                         message1 = "Step {}/{}, ".format(step, total_step)
-                        message2 = "Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}, Alignment Loss: {:.4f}".format(
-                            *losses
+                        message2 = (
+                           "Total Loss: {total_loss:.4f}, " +
+                           "Mel Loss: {mel_loss:.4f}, " +
+                           "Duration Loss: {duration_loss:.4f}, " +
+                           "Pitch Loss: {pitch_loss:.4f}, " +
+                           "Alignment Loss: {alignment_loss:.4f}, " +
+                           "Generator Loss: {generator_loss:.4f}, " +
+                           "Discriminator Loss: {discriminator_loss:.4f}"
+                        ).format(
+                            loss_dict
                         )
 
                         with open(os.path.join(train_log_path, "log.txt"), "a") as f:
@@ -356,46 +456,16 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                         outer_bar.write(message1 + message2)
 
-                        log(train_logger, step, losses=losses)
-
-                    if step % synth_step == 0:
-                        fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
-                            ids=ids,
-                            duration_targets=durations,
-                            pitch_targets=avg_pitches,
-                            mel_targets=mels,
-                            mel_predictions=postnet_outputs,
-                            phoneme_lens=phoneme_lens,
-                            mel_lens=mel_lens,
-                            vocoder=vocoder,
-                            config=config
-                        )
-                        log(
-                            train_logger,
-                            fig=fig,
-                            tag="Training/step_{}_{}".format(step, tag),
-                        )
-                        sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
-                        log(
-                            train_logger,
-                            audio=wav_reconstruction,
-                            sampling_rate=sampling_rate,
-                            tag="Training/step_{}_{}_reconstructed".format(step, tag),
-                        )
-                        log(
-                            train_logger,
-                            audio=wav_prediction,
-                            sampling_rate=sampling_rate,
-                            tag="Training/step_{}_{}_synthesized".format(step, tag),
-                        )
+                        log(train_logger, step, loss_dict=loss_dict)
 
                     if step % val_step == 0:
                         variance_model.eval()
                         embedder_model.eval()
                         decoder_model.eval()
                         extractor_model.eval()
+                        generator_model.eval()
                         message = evaluate(
-                            variance_model, embedder_model, decoder_model, extractor_model, length_regulator, step, config, val_logger, vocoder
+                            variance_model, embedder_model, decoder_model, extractor_model, generator_model, length_regulator, step, config, val_logger
                         )
                         with open(os.path.join(val_log_path, "log.txt"), "a") as f:
                             f.write(message + "\n")
@@ -405,6 +475,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         embedder_model.train()
                         decoder_model.train()
                         extractor_model.train()
+                        generator_model.train()
 
                     if step % save_step == 0:
                         torch.save(
@@ -413,11 +484,16 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                                 "embedder_model": (embedder_model.module if num_gpus > 1 else embedder_model).state_dict(),
                                 "decoder_model": (decoder_model.module if num_gpus > 1 else decoder_model).state_dict(),
                                 "extractor_model": (extractor_model.module if num_gpus > 1 else extractor_model).state_dict(),
+                                "generator_model": (generator_model.module if num_gpus > 1 else generator_model).state_dict(),
+                                "mpd_model": (mpd_model.module if num_gpus > 1 else mpd_model).state_dict(),
+                                "msd_model": (msd_model.module if num_gpus > 1 else msd_model).state_dict(),
                                 "optimizer": {
                                     "variance": optimizer._variance_optimizer.state_dict(),
                                     "embedder": optimizer._embedder_optimizer.state_dict(),
                                     "decoder": optimizer._decoder_optimizer.state_dict(),
                                     "extractor": optimizer._extractor_optimizer.state_dict(),
+                                    "generator": optimizer._generator_optimizer.state_dict(),
+                                    "discriminator": optimizer._discriminator_optimizer.state_dict(),
                                 },
                             },
                             os.path.join(

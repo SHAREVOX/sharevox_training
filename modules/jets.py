@@ -6,6 +6,7 @@ from typing import TypedDict, Literal, Optional, Union
 
 import fregan
 import hifigan
+from fregan import VocoderConfig
 from modules.alignment import AlignmentModule, viterbi_decode, average_by_duration
 from modules.tacotron2.decoder import Postnet
 from modules.conformer.encoder import Encoder as ConformerEncoder
@@ -24,6 +25,8 @@ class VarianceEmbedding(TypedDict):
 
 VocoderType = Literal["fregan", "hifigan"]
 VocoderGenerator = Union[fregan.Generator, hifigan.Generator]
+VocoderMultiPeriodDiscriminator = Union[fregan.ResWiseMultiPeriodDiscriminator, hifigan.Generator]
+VocoderMultiScaleDiscriminator = Union[fregan.ResWiseMultiScaleDiscriminator, hifigan.Generator]
 
 
 class ModelConfig(TypedDict):
@@ -36,6 +39,7 @@ class ModelConfig(TypedDict):
     variance_predictor: VariancePredictorConfig
     variance_embedding: VarianceEmbedding
     vocoder_type: VocoderType
+    vocoder: VocoderConfig
 
 
 class BaseModule(nn.Module):
@@ -280,7 +284,7 @@ class MelSpectrogramDecoder(BaseModule):
 
         self.mel_channels = 80
         self.mel_linear = nn.Linear(hidden, self.mel_channels)
-        self.postnet = Postnet()
+        # self.postnet = Postnet()
 
     def forward(
         self,
@@ -306,8 +310,9 @@ class MelSpectrogramDecoder(BaseModule):
             outputs.size(0), -1, self.mel_channels
         )  # (B, T_feats, odim)
 
-        postnet_outputs = outputs + self.postnet(
-            outputs.transpose(1, 2)
-        ).transpose(1, 2)
+        # postnet_outputs = outputs + self.postnet(
+        #     outputs.transpose(1, 2)
+        # ).transpose(1, 2)
+        postnet_outputs = None
 
         return outputs, postnet_outputs

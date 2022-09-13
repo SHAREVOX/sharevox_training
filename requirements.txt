@@ -10,5 +10,6 @@ sklearn
 librosa
 pyyaml
 pyworld
+PyWavelets
 pyopenjtalk
 onnxruntime
