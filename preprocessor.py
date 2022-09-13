@@ -92,7 +92,6 @@ class Preprocessor:
     def build_from_path(self) -> List[str]:
         os.makedirs((os.path.join(self.out_dir, "mel")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "pitch")), exist_ok=True)
-        os.makedirs((os.path.join(self.out_dir, "energy")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "accent")), exist_ok=True)
 
         print("Processing Data ...")
@@ -100,7 +99,7 @@ class Preprocessor:
         n_frames = 0
         pitch_scaler = StandardScaler()
 
-        # Compute pitch, energy, duration, and mel-spectrogram
+        # Compute pitch, duration, and mel-spectrogram
         speakers = {}
         dirs = list(filter(lambda x: os.path.isdir(os.path.join(self.in_dir, x)), os.listdir(self.in_dir)))
         for i, speaker in enumerate(tqdm(dirs, desc="Dir", position=0)):
