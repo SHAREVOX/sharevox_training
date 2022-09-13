@@ -111,17 +111,6 @@ def get_vocoder(device: TorchDevice, type: VocoderType = "fregan") -> VocoderGen
         vocoder.load_state_dict(ckpt["generator"])
         vocoder.eval()
         vocoder.remove_weight_norm()
-    elif type == "melgan":
-        import mb_melgan
-        config = mb_melgan.Config()
-        vocoder = mb_melgan.Generator(
-            config.n_mel_channels, config.n_residual_layers,
-            ratios=config.generator_ratio, mult=config.mult,
-            out_band=config.out_channels
-        )
-        ckpt = torch.load("mb_melgan/g_31575.pt", map_location=device)
-        vocoder.load_state_dict(ckpt["model_g"])
-        vocoder.eval(inference=True)
     else:
         raise Exception(f"Unsupported vocoder: {type}")
     vocoder.to(device)

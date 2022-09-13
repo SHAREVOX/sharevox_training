@@ -6,7 +6,6 @@ from typing import TypedDict, Literal, Optional, Union
 
 import fregan
 import hifigan
-import mb_melgan
 from modules.alignment import AlignmentModule, viterbi_decode, average_by_duration
 from modules.tacotron2.decoder import Postnet
 from modules.conformer.encoder import Encoder as ConformerEncoder
@@ -23,8 +22,8 @@ class VarianceEmbedding(TypedDict):
     n_bins: Optional[int]
 
 
-VocoderType = Literal["fregan", "hifigan", "melgan"]
-VocoderGenerator = Union[fregan.Generator, hifigan.Generator, mb_melgan.Generator]
+VocoderType = Literal["fregan", "hifigan"]
+VocoderGenerator = Union[fregan.Generator, hifigan.Generator]
 
 
 class ModelConfig(TypedDict):
