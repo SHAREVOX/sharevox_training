@@ -127,7 +127,8 @@ def evaluate(
                     mel_lens=mel_lens,
                 )
                 wav_outputs = generator_model(outputs.transpose(1, 2))
-                mel_from_outputs = stft_module.mel_spectrogram(wav_outputs.squeeze(1))
+                mel_from_outputs = stft_module.mel_spectrogram(wav_outputs.squeeze(1)).to(mels.device)
+                mel_from_outputs = mel_from_outputs[:,:,:mels.size(1)]
 
                 # Cal Loss
                 variance_loss_all, duration_loss, pitch_loss, align_loss = variance_loss(
@@ -139,7 +140,7 @@ def evaluate(
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                mel_loss = F.l1_loss(mels, mel_from_outputs)
+                mel_loss = F.l1_loss(mels.transpose(1, 2), mel_from_outputs)
 
                 align_loss += bin_loss
 
