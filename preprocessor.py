@@ -2,6 +2,9 @@ import os
 import random
 import json
 import argparse
+
+import torch
+import torch.nn.functional as F
 import yaml
 from scipy.interpolate import interp1d
 
@@ -54,6 +57,8 @@ def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> np.ndarray
     in_dir = config["path"]["data_path"]
     max_wav_value = config["audio"]["max_wav_value"]
     sampling_rate = config["audio"]["sampling_rate"]
+    filter_length = config["stft"]["filter_length"]
+    hop_length = config["stft"]["hop_length"]
 
     wav_path = os.path.join(in_dir, speaker, "{}.wav".format(basename))
 
@@ -63,8 +68,17 @@ def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> np.ndarray
     assert sampling_rate == sr, f"sampling rate is invalid (required: {sampling_rate}, actually: {sr}, file: {wav_path})"
     wav = wav / max_wav_value
     wav = normalize(wav) * 0.95
-    wav = wav.astype(np.float32)
 
+    # padding
+    wav_tensor = torch.FloatTensor(wav)
+    wav_tensor = wav_tensor.unsqueeze(0)
+    wav_tensor = F.pad(
+        wav_tensor.unsqueeze(1),
+        (int((filter_length - hop_length) / 2), int((filter_length - hop_length) / 2)),
+        mode='reflect'
+    )
+
+    wav = wav_tensor.squeeze().cpu().numpy().astype(np.float32)
     return wav
 
 
