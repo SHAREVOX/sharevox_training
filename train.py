@@ -204,7 +204,7 @@ def evaluate(
             "Pitch Loss: {pitch_loss:.4f}, " +
             "Alignment Loss: {alignment_loss:.4f}"
     ).format(
-        loss_dict
+        **loss_dict
     )
 
     return message1 + message2
@@ -448,7 +448,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                            "Generator Loss: {generator_loss:.4f}, " +
                            "Discriminator Loss: {discriminator_loss:.4f}"
                         ).format(
-                            loss_dict
+                            **loss_dict
                         )
 
                         with open(os.path.join(train_log_path, "log.txt"), "a") as f:
