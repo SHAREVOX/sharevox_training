@@ -126,7 +126,7 @@ def evaluate(
                     length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
-                wav_outputs = generator_model(outputs)
+                wav_outputs = generator_model(outputs.transpose(1, 2))
                 mel_from_outputs = stft_module.mel_spectrogram(wav_outputs.squeeze(1))
 
                 # Cal Loss
