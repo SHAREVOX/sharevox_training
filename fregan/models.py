@@ -8,7 +8,6 @@ from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
 
 from typing import Tuple, List, Optional, TypedDict
 
-from stft import STFT
 
 LRELU_SLOPE = 0.1
 Pad_Mode = ['constant', 'reflect', 'replicate', 'circular']
@@ -45,9 +44,12 @@ def stft(x, fft_size, hop_size, win_length, window):
     Returns:
         Tensor: Magnitude spectrogram (B, #frames, fft_size // 2 + 1).
     """
-    stft_fn = STFT(fft_size, hop_size, win_length, window)
-    x_stft, _ = stft_fn.transform(x)
-    return x_stft
+    x_stft = torch.stft(x, fft_size, hop_size, win_length, window)
+    real = x_stft[..., 0]
+    imag = x_stft[..., 1]
+
+    # NOTE(kan-bayashi): clamp is needed to avoid nan or inf
+    return torch.sqrt(torch.clamp(real ** 2 + imag ** 2, min=1e-7)).transpose(2, 1)
 
 
 class DWT_1D(nn.Module):
