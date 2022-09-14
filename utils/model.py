@@ -134,6 +134,7 @@ def get_model(
     decoder_model.eval()
     extractor_model.eval()
     generator_model.eval()
+    generator_model.remove_weight_norm()
     variance_model.requires_grad_ = False
     embedder_model.requires_grad_ = False
     decoder_model.requires_grad_ = False
