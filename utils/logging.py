@@ -28,6 +28,11 @@ def log(
     tag: str = ""
 ):
     if loss_dict is not None:
+        keys = list(loss_dict.keys())
+        for key in keys:
+            if loss_dict[key] is None:
+                del loss_dict[key]
+
         logger.add_scalars("Loss", loss_dict, step)
     if fig is not None:
         logger.add_figure(tag, fig, step)
