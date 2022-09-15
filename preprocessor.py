@@ -17,7 +17,7 @@ import numpy as np
 import pyworld as pw
 from tqdm import tqdm
 
-from stft import mel_spectrogram
+from stft import TacotronSTFT, get_mel_from_wav
 
 from typing import Tuple, List, TypedDict
 
@@ -92,6 +92,16 @@ class Preprocessor:
         self.sampling_rate = config["audio"]["sampling_rate"]
         self.max_wav_value = config["audio"]["max_wav_value"]
         self.hop_length = config["stft"]["hop_length"]
+
+        self.STFT = TacotronSTFT(
+            config["stft"]["filter_length"],
+            config["stft"]["hop_length"],
+            config["stft"]["win_length"],
+            config["mel"]["n_mel_channels"],
+            config["audio"]["sampling_rate"],
+            config["mel"]["mel_fmin"],
+            config["mel"]["mel_fmax"],
+        )
 
     def build_from_path(self) -> List[str]:
         os.makedirs((os.path.join(self.out_dir, "wav")), exist_ok=True)
@@ -206,20 +216,8 @@ class Preprocessor:
         pitch: np.ndarray = interp_fn(np.arange(0, len(pitch)))
 
         # Compute mel-scale spectrogram
-        wav_torch = torch.FloatTensor(wav).unsqueeze(0)
-        mel_spec = mel_spectrogram(
-            y=wav_torch,
-            n_fft=self.config["stft"]["filter_length"],
-            num_mels=self.config["mel"]["n_mel_channels"],
-            sampling_rate=self.config["audio"]["sampling_rate"],
-            hop_size=self.config["stft"]["hop_length"],
-            win_size=self.config["stft"]["win_length"],
-            fmin=self.config["mel"]["mel_fmin"],
-            fmax=self.config["mel"]["mel_fmax"]
-        )
-        mel_spec = torch.squeeze(mel_spec, 0).numpy().astype(np.float32)
-
-        assert pitch.size == mel_spec.shape[1], "pitch length != mel spec length"
+        mel_spectrogram = get_mel_from_wav(wav, self.STFT)
+        assert pitch.size == mel_spectrogram.shape[1], "pitch length != mel spec length"
 
         # Save files
         wav_filename = "{}-wav-{}.npy".format(speaker, basename)
@@ -231,12 +229,12 @@ class Preprocessor:
         mel_filename = "{}-mel-{}.npy".format(speaker, basename)
         np.save(
             os.path.join(self.out_dir, "mel", mel_filename),
-            mel_spec.T,
+            mel_spectrogram.T,
         )
 
         return (
             self.remove_outlier(pitch),
-            mel_spec.shape[1],
+            mel_spectrogram.shape[1],
         )
 
     def remove_outlier(self, values: np.ndarray) -> np.ndarray:
