@@ -1,12 +1,11 @@
 import argparse
 import os
-from typing import List
 
 import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 import yaml
-from torch import nn, Tensor
+from torch import nn
 from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
@@ -360,61 +359,27 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     mel_lens=mel_lens,
                 )
 
-                all_mel_from_outputs: Tensor = None
-                all_segmented_wavs: Tensor
-                all_segmented_mels: Tensor
-                all_wav_outputs: Tensor
-                all_y_df_hat_r: List[Tensor]
-                all_y_df_hat_g: List[Tensor]
-                all_y_ds_hat_r: List[Tensor]
-                all_y_ds_hat_g: List[Tensor]
-                repeat_num = mels.size(1) // (segment_size // hop_length)
-                repeat_num = repeat_num if repeat_num > 0 else 1
-                for i in range(repeat_num):
-                    segmented_outputs, start_idxs = get_random_segments(outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
-                    segmented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
+                segmented_outputs, start_idxs = get_random_segments(outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
+                segumented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
 
-                    wav_outputs = generator_model(segmented_outputs)
-                    mel_from_outputs = get_mel_in_train(
-                        y=wav_outputs.squeeze(1),
-                        n_fft=preprocess_config["stft"]["filter_length"],
-                        num_mels=preprocess_config["mel"]["n_mel_channels"],
-                        sampling_rate=preprocess_config["audio"]["sampling_rate"],
-                        hop_size=preprocess_config["stft"]["hop_length"],
-                        win_size=preprocess_config["stft"]["win_length"],
-                        fmin=preprocess_config["mel"]["mel_fmin"],
-                        fmax=preprocess_config["mel"]["mel_fmax"]
-                    )
-                    segmented_mels = get_segments(mels.transpose(1, 2), start_idxs, segment_size // hop_length)
+                wav_outputs = generator_model(segmented_outputs)
+                mel_from_outputs = get_mel_in_train(
+                    y=wav_outputs.squeeze(1),
+                    n_fft=preprocess_config["stft"]["filter_length"],
+                    num_mels=preprocess_config["mel"]["n_mel_channels"],
+                    sampling_rate=preprocess_config["audio"]["sampling_rate"],
+                    hop_size=preprocess_config["stft"]["hop_length"],
+                    win_size=preprocess_config["stft"]["win_length"],
+                    fmin=preprocess_config["mel"]["mel_fmin"],
+                    fmax=preprocess_config["mel"]["mel_fmax"]
+                )
+                segumented_mels = get_segments(mels.transpose(1, 2), start_idxs, segment_size // hop_length)
 
-                    y_df_hat_r, y_df_hat_g, _, _ = mpd_model(segmented_wavs, wav_outputs.detach())
-                    y_ds_hat_r, y_ds_hat_g, _, _ = msd_model(segmented_wavs, wav_outputs.detach())
-
-                    if all_mel_from_outputs is None:
-                        all_mel_from_outputs = mel_from_outputs
-                        all_segmented_wavs = segmented_wavs
-                        all_segmented_mels = segmented_mels
-                        all_wav_outputs = wav_outputs
-                        all_y_df_hat_r = y_df_hat_r
-                        all_y_df_hat_g = y_df_hat_g
-                        all_y_ds_hat_r = y_ds_hat_r
-                        all_y_ds_hat_g = y_ds_hat_g
-                    else:
-                        all_mel_from_outputs = torch.cat((all_mel_from_outputs, mel_from_outputs), 0)
-                        all_segmented_wavs = torch.cat((all_segmented_wavs, segmented_wavs), 0)
-                        all_segmented_mels = torch.cat((all_segmented_mels, segmented_mels), 0)
-                        all_wav_outputs = torch.cat((all_wav_outputs, wav_outputs), 0)
-                        for j in range(len(all_y_df_hat_r)):
-                            all_y_df_hat_r[j] = torch.cat((all_y_df_hat_r[j], y_df_hat_r[j]), 0)
-                            all_y_df_hat_g[j] = torch.cat((all_y_df_hat_g[j], y_df_hat_g[j]), 0)
-                        for j in range(len(all_y_df_hat_r)):
-                            all_y_ds_hat_r[j] = torch.cat((all_y_ds_hat_r[j], y_ds_hat_r[j]), 0)
-                            all_y_ds_hat_g[j] = torch.cat((all_y_ds_hat_g[j], y_ds_hat_g[j]), 0)
+                y_df_hat_r, y_df_hat_g, _, _ = mpd_model(segumented_wavs, wav_outputs.detach())
+                y_ds_hat_r, y_ds_hat_g, _, _ = msd_model(segumented_wavs, wav_outputs.detach())
 
                 # Discriminator Loss
-                loss_disc_all, loss_disc_s, loss_disc_f = discriminator_loss(
-                    all_y_df_hat_r, all_y_df_hat_g, all_y_ds_hat_r, all_y_ds_hat_g
-                )
+                loss_disc_all, loss_disc_s, loss_disc_f = discriminator_loss(y_df_hat_r, y_df_hat_g, y_ds_hat_r, y_ds_hat_g)
                 loss_disc_all /= grad_acc_step
                 loss_disc_all.backward()
 
@@ -428,11 +393,11 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                _, y_df_hat_g, fmap_f_r, fmap_f_g = mpd_model(all_segmented_wavs, all_wav_outputs)
-                _, y_ds_hat_g, fmap_s_r, fmap_s_g = msd_model(all_segmented_wavs, all_wav_outputs)
+                _, y_df_hat_g, fmap_f_r, fmap_f_g = mpd_model(segumented_wavs, wav_outputs)
+                _, y_ds_hat_g, fmap_s_r, fmap_s_g = msd_model(segumented_wavs, wav_outputs)
                 loss_gen_all, loss_gen_s, loss_gen_f, loss_fm_s, loss_fm_f, loss_mel = generator_loss(
-                    mels=all_segmented_mels,
-                    mel_from_outputs=all_mel_from_outputs,
+                    mels=segumented_mels,
+                    mel_from_outputs=mel_from_outputs,
                     y_df_hat_g=y_df_hat_g,
                     fmap_f_r=fmap_f_r,
                     fmap_f_g=fmap_f_g,
