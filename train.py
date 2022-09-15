@@ -460,7 +460,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         log(train_logger, step, loss_dict=loss_dict)
 
                     if step % synth_step == 0:
-                        wav_outputs = generator_model(outputs)
+                        wav_outputs = generator_model(outputs.transpose(1, 2))
                         mel_from_wavs = get_mel_in_train(
                             y=wav_outputs.squeeze(1),
                             n_fft=preprocess_config["stft"]["filter_length"],
