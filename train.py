@@ -459,6 +459,46 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                         log(train_logger, step, loss_dict=loss_dict)
 
+                    if step % synth_step == 0:
+                        wav_outputs = generator_model(outputs)
+                        mel_from_wavs = get_mel_in_train(
+                            y=wav_outputs.squeeze(1),
+                            n_fft=preprocess_config["stft"]["filter_length"],
+                            num_mels=preprocess_config["mel"]["n_mel_channels"],
+                            sampling_rate=preprocess_config["audio"]["sampling_rate"],
+                            hop_size=preprocess_config["stft"]["hop_length"],
+                            win_size=preprocess_config["stft"]["win_length"],
+                            fmin=preprocess_config["mel"]["mel_fmin"],
+                            fmax=preprocess_config["mel"]["mel_fmax"]
+                        )
+                        fig, tag = plot_one_sample(
+                            ids=ids,
+                            duration_targets=durations,
+                            pitch_targets=avg_pitches,
+                            mel_targets=mels,
+                            mel_predictions=mel_from_wavs,
+                            phoneme_lens=phoneme_lens,
+                            mel_lens=mel_lens
+                        )
+                        log(
+                            train_logger,
+                            fig=fig,
+                            tag="Training/step_{}_{}".format(step, tag),
+                        )
+                        sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
+                        log(
+                            train_logger,
+                            audio=wavs[0],
+                            sampling_rate=sampling_rate,
+                            tag="Training/step_{}_{}_reconstructed".format(step, tag),
+                        )
+                        log(
+                            train_logger,
+                            audio=wav_outputs[0],
+                            sampling_rate=sampling_rate,
+                            tag="Training/step_{}_{}_synthesized".format(step, tag),
+                        )
+
                     if step % val_step == 0:
                         variance_model.eval()
                         embedder_model.eval()
