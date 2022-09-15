@@ -407,7 +407,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         for j in range(len(all_y_df_hat_r)):
                             all_y_df_hat_r[j] = torch.cat((all_y_df_hat_r[j], y_df_hat_r[j]), 0)
                             all_y_df_hat_g[j] = torch.cat((all_y_df_hat_g[j], y_df_hat_g[j]), 0)
-                        for j in range(len(all_y_df_hat_r)):
+                        for j in range(len(all_y_ds_hat_r)):
                             all_y_ds_hat_r[j] = torch.cat((all_y_ds_hat_r[j], y_ds_hat_r[j]), 0)
                             all_y_ds_hat_g[j] = torch.cat((all_y_ds_hat_g[j], y_ds_hat_g[j]), 0)
 
