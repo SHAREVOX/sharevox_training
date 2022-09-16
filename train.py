@@ -463,7 +463,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                     if step % synth_step == 0:
                         wav_outputs = generator_model(outputs[0].unsqueeze(0).transpose(1, 2))
-                        mel_from_wavs = get_mel_in_train(
+                        mel_from_wavs = mel_spectrogram(
                             y=wav_outputs.squeeze(1),
                             n_fft=preprocess_config["stft"]["filter_length"],
                             num_mels=preprocess_config["mel"]["n_mel_channels"],
