@@ -84,13 +84,13 @@ class ResBlock2(torch.nn.Module):
 
 
 class Generator(torch.nn.Module):
-    def __init__(self,  h: VocoderConfig):
+    def __init__(self, h: VocoderConfig, input_size: int = 80):
         super(Generator, self).__init__()
         self.h = h
         self.num_kernels = len(h["resblock_kernel_sizes"])
         self.num_upsamples = len(h["upsample_rates"])
         upsample_initial_channel = h["upsample_initial_channel"]
-        self.conv_pre = weight_norm(Conv1d(80, upsample_initial_channel, 7, 1, padding=3))
+        self.conv_pre = weight_norm(Conv1d(input_size, upsample_initial_channel, 7, 1, padding=3))
         resblock = ResBlock1 if h["resblock"] == '1' else ResBlock2
 
         self.ups = nn.ModuleList()

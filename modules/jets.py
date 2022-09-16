@@ -282,8 +282,8 @@ class MelSpectrogramDecoder(BaseModule):
         else:
             raise ValueError("unknown decoder: " + decoder_type)
 
-        self.mel_channels = 80
-        self.mel_linear = nn.Linear(hidden, self.mel_channels)
+        # self.mel_channels = 80
+        # self.mel_linear = nn.Linear(hidden, self.mel_channels)
         # self.postnet = Postnet()
 
     def forward(
@@ -306,9 +306,9 @@ class MelSpectrogramDecoder(BaseModule):
             h_masks = None
 
         outputs, _ = self.decoder(length_regulated_tensor, h_masks)
-        outputs = self.mel_linear(outputs).view(
-            outputs.size(0), -1, self.mel_channels
-        )  # (B, T_feats, odim)
+        # outputs = self.mel_linear(outputs).view(
+        #     outputs.size(0), -1, self.mel_channels
+        # )  # (B, T_feats, odim)
 
         # postnet_outputs = outputs + self.postnet(
         #     outputs.transpose(1, 2)

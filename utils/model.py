@@ -75,14 +75,15 @@ def get_model(
     decoder_model = MelSpectrogramDecoder(config["model"]).to(device)
     extractor_model = PitchAndDurationExtractor(config["model"]).to(device)
     vocoder_type = config["model"]["vocoder_type"]
+    hidden_size = config["model"]["decoder"]["hidden"]
     if vocoder_type == "fregan":
         import fregan
-        generator_model = fregan.Generator(config["model"]["vocoder"])
+        generator_model = fregan.Generator(config["model"]["vocoder"], hidden_size)
         mpd_model = fregan.ResWiseMultiPeriodDiscriminator()
         msd_model = fregan.ResWiseMultiScaleDiscriminator()
     elif vocoder_type == "hifigan":
         import hifigan
-        generator_model = hifigan.Generator(config["model"]["vocoder"])
+        generator_model = hifigan.Generator(config["model"]["vocoder"], hidden_size)
         mpd_model = hifigan.MultiPeriodDiscriminator()
         msd_model = hifigan.MultiScaleDiscriminator()
     else:
