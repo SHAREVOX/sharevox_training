@@ -56,14 +56,14 @@ def to_device(data: Any, device: TorchDevice):
             pitches,
         ) = data
 
-        speakers = torch.autograd.Variable(torch.from_numpy(speakers).long().to(device, non_blocking=True))
-        phonemes = torch.autograd.Variable(torch.from_numpy(phonemes).long().to(device, non_blocking=True))
-        phoneme_lens = torch.autograd.Variable(torch.from_numpy(phoneme_lens).long().to(device, non_blocking=True))
-        accents = torch.autograd.Variable(torch.from_numpy(accents).long().to(device, non_blocking=True))
-        wavs = torch.autograd.Variable(torch.from_numpy(wavs).float().to(device, non_blocking=True))
-        mels = torch.autograd.Variable(torch.from_numpy(mels).float().to(device, non_blocking=True))
-        mel_lens = torch.autograd.Variable(torch.from_numpy(mel_lens).long().to(device, non_blocking=True))
-        pitches = torch.autograd.Variable(torch.from_numpy(pitches).float().to(device, non_blocking=True))
+        speakers = torch.from_numpy(speakers).long().to(device, non_blocking=True)
+        phonemes = torch.from_numpy(phonemes).long().to(device, non_blocking=True)
+        phoneme_lens = torch.from_numpy(phoneme_lens).long().to(device, non_blocking=True)
+        accents = torch.from_numpy(accents).long().to(device, non_blocking=True)
+        wavs = torch.from_numpy(wavs).float().to(device, non_blocking=True)
+        mels = torch.from_numpy(mels).float().to(device, non_blocking=True)
+        mel_lens = torch.from_numpy(mel_lens).long().to(device, non_blocking=True)
+        pitches = torch.from_numpy(pitches).float().to(device, non_blocking=True)
 
         return (
             ids,
