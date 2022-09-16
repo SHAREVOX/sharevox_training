@@ -267,10 +267,6 @@ def spectral_normalize_torch(magnitudes):
     output = dynamic_range_compression_torch(magnitudes)
     return output
 
-
-mel_basis = {}
-hann_window = {}
-
 def get_mel_in_train(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
     if torch.min(y) < -1.:
         print('min value is ', torch.min(y))
