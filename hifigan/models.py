@@ -91,7 +91,7 @@ class Generator(torch.nn.Module):
         self.num_upsamples = len(h["upsample_rates"])
         upsample_initial_channel = h["upsample_initial_channel"]
         self.conv_pre = weight_norm(Conv1d(80, upsample_initial_channel, 7, 1, padding=3))
-        resblock = ResBlock1 if h.resblock == '1' else ResBlock2
+        resblock = ResBlock1 if h["resblock"] == '1' else ResBlock2
 
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(h["upsample_rates"], h["upsample_kernel_sizes"])):
