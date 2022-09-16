@@ -15,7 +15,7 @@ from tqdm import tqdm
 from dataset import Dataset
 from modules.gaussian_upsampling import GaussianUpsampling
 from modules.loss import VarianceLoss, DiscriminatorLoss, GeneratorLoss
-from stft import get_mel_in_train
+from stft import TacotronSTFT
 from utils.logging import log, LossDict
 from utils.mask import make_non_pad_mask
 from utils.model import Config, get_model, get_param_num
@@ -51,6 +51,15 @@ def evaluate(
     )
 
     preprocess_config = config["preprocess"]
+    stft_module = TacotronSTFT(
+        preprocess_config["stft"]["filter_length"],
+        preprocess_config["stft"]["hop_length"],
+        preprocess_config["stft"]["win_length"],
+        preprocess_config["mel"]["n_mel_channels"],
+        preprocess_config["audio"]["sampling_rate"],
+        preprocess_config["mel"]["mel_fmin"],
+        preprocess_config["mel"]["mel_fmax"],
+    )
 
     # Get loss function
     variance_loss = VarianceLoss().to(device)
@@ -118,17 +127,8 @@ def evaluate(
                     mel_lens=mel_lens,
                 )
                 wav_outputs = generator_model(outputs.transpose(1, 2))
-                mel_from_outputs = get_mel_in_train(
-                    y=wav_outputs.squeeze(1),
-                    n_fft=preprocess_config["stft"]["filter_length"],
-                    num_mels=preprocess_config["mel"]["n_mel_channels"],
-                    sampling_rate=preprocess_config["audio"]["sampling_rate"],
-                    hop_size=preprocess_config["stft"]["hop_length"],
-                    win_size=preprocess_config["stft"]["win_length"],
-                    fmin=preprocess_config["mel"]["mel_fmin"],
-                    fmax=preprocess_config["mel"]["mel_fmax"]
-                ).transpose(1, 2)
-                # mel_from_outputs = mel_from_outputs[:,:mels.size(1),:]
+                mel_from_outputs = stft_module.mel_spectrogram(wav_outputs.squeeze(1)).transpose(1, 2).to(mels.device)
+                mel_from_outputs = mel_from_outputs[:,:mels.size(1),:]
 
                 # Cal Loss
                 variance_loss_all, duration_loss, pitch_loss, align_loss = variance_loss(
@@ -251,6 +251,15 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
         get_model(restore_step, config, device, speaker_num, train=True)
     length_regulator = GaussianUpsampling().to(device)
     preprocess_config = config["preprocess"]
+    stft_module = TacotronSTFT(
+        preprocess_config["stft"]["filter_length"],
+        preprocess_config["stft"]["hop_length"],
+        preprocess_config["stft"]["win_length"],
+        preprocess_config["mel"]["n_mel_channels"],
+        preprocess_config["audio"]["sampling_rate"],
+        preprocess_config["mel"]["mel_fmin"],
+        preprocess_config["mel"]["mel_fmax"],
+    )
     if num_gpus > 1:
         variance_model = DistributedDataParallel(variance_model, device_ids=[rank]).to(device)
         embedder_model = DistributedDataParallel(embedder_model, device_ids=[rank]).to(device)
@@ -363,17 +372,8 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 segumented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
 
                 wav_outputs = generator_model(segmented_outputs)
-                mel_from_outputs = get_mel_in_train(
-                    y=wav_outputs.squeeze(1),
-                    n_fft=preprocess_config["stft"]["filter_length"],
-                    num_mels=preprocess_config["mel"]["n_mel_channels"],
-                    sampling_rate=preprocess_config["audio"]["sampling_rate"],
-                    hop_size=preprocess_config["stft"]["hop_length"],
-                    win_size=preprocess_config["stft"]["win_length"],
-                    fmin=preprocess_config["mel"]["mel_fmin"],
-                    fmax=preprocess_config["mel"]["mel_fmax"]
-                )
-                segumented_mels = get_segments(mels.transpose(1, 2), start_idxs, segment_size // hop_length)
+                mel_from_outputs = stft_module.mel_spectrogram(wav_outputs.squeeze(1))
+                segumented_mels = stft_module.mel_spectrogram(segumented_wavs.squeeze(1))
 
                 y_df_hat_r, y_df_hat_g, _, _ = mpd_model(segumented_wavs, wav_outputs.detach())
                 y_ds_hat_r, y_ds_hat_g, _, _ = msd_model(segumented_wavs, wav_outputs.detach())
