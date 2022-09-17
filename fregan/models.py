@@ -240,7 +240,7 @@ class Generator(torch.nn.Module):
         self.cond_up = nn.ModuleList()
         self.res_output = nn.ModuleList()
         upsample_: int = 1
-        kr: int = 80
+        kr: int = input_size
 
         for i, (u, k) in enumerate(zip(self.upsample_rates, self.up_kernels)):
             self.ups.append(weight_norm(
