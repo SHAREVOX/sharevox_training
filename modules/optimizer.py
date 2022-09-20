@@ -27,7 +27,8 @@ class ScheduledOptim:
 
         betas = train_config["optimizer"]["betas"]
         lr = train_config["optimizer"]["learning_rate"]
-        lr_decay = train_config["optimizer"]["lr_decay"]
+        self.lr_decay = train_config["optimizer"]["lr_decay"]
+        self.last_epoch = last_epoch
 
         self._variance_optimizer = torch.optim.AdamW(variance_model.parameters(), lr=lr, betas=betas)
         self._embedder_optimizer = torch.optim.AdamW(embedder_model.parameters(), lr=lr, betas=betas)
@@ -38,23 +39,34 @@ class ScheduledOptim:
             itertools.chain(msd_model.parameters(), mpd_model.parameters()), lr=lr, betas=betas
         )
 
+        try:
+            self._set_scheduler()
+        except Exception:
+            self._variance_scheduler = None
+            self._embedder_scheduler = None
+            self._decoder_scheduler = None
+            self._extractor_scheduler = None
+            self._generator_scheduler = None
+            self._discriminator_scheduler = None
+
+    def _set_scheduler(self) -> None:
         self._variance_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self._variance_optimizer, gamma=lr_decay, last_epoch=last_epoch
+            self._variance_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
         )
         self._embedder_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self._embedder_optimizer, gamma=lr_decay, last_epoch=last_epoch
+            self._embedder_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
         )
         self._decoder_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self._decoder_optimizer, gamma=lr_decay, last_epoch=last_epoch
+            self._decoder_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
         )
         self._extractor_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self._extractor_optimizer, gamma=lr_decay, last_epoch=last_epoch
+            self._extractor_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
         )
         self._generator_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self._generator_optimizer, gamma=lr_decay, last_epoch=last_epoch
+            self._generator_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
         )
         self._discriminator_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self._discriminator_optimizer, gamma=lr_decay, last_epoch=last_epoch
+            self._discriminator_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
         )
 
     def step_and_update_lr(self) -> None:
@@ -81,6 +93,8 @@ class ScheduledOptim:
         self._extractor_optimizer.load_state_dict(path["extractor"])
         self._generator_optimizer.load_state_dict(path["generator"])
         self._discriminator_optimizer.load_state_dict(path["discriminator"])
+
+        self._set_scheduler()
 
     def _update_learning_rate(self) -> None:
         """ Learning rate scheduling per step """
