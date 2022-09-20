@@ -99,7 +99,7 @@ class VarianceLoss(nn.Module):
         pitch_loss = self.mse_criterion(pitch_outputs, pitch_targets)
         forward_sum_loss = self.forward_sum_loss(log_p_attn, input_lens, output_lens)
 
-        total_loss = duration_loss + pitch_loss + forward_sum_loss
+        total_loss = duration_loss + pitch_loss + (forward_sum_loss * 2.0)
 
         return total_loss, duration_loss, pitch_loss, forward_sum_loss
 

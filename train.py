@@ -380,6 +380,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                 # Discriminator Loss
                 loss_disc_all, loss_disc_s, loss_disc_f = discriminator_loss(y_df_hat_r, y_df_hat_g, y_ds_hat_r, y_ds_hat_g)
+                loss_disc_all = loss_disc_all * 2.0
                 loss_disc_all.backward()
 
                 # Variance & Generator Loss
@@ -407,7 +408,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                 align_loss += bin_loss
 
-                total_loss = variance_loss_all + bin_loss + loss_gen_all
+                total_loss = variance_loss_all + (bin_loss * 2.0) + loss_gen_all
 
                 # Backward
                 total_loss.backward()
