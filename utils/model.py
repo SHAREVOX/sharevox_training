@@ -33,7 +33,8 @@ def get_model(
     VocoderGenerator,
     VocoderMultiPeriodDiscriminator,
     VocoderMultiScaleDiscriminator,
-    ScheduledOptim
+    ScheduledOptim,
+    int,
 ]:
     pass
 
@@ -53,7 +54,8 @@ def get_model(
     VocoderGenerator,
     None,
     None,
-    None
+    None,
+    int,
 ]:
     pass
 
@@ -92,6 +94,7 @@ def get_model(
     mpd_model.to(device)
     msd_model.to(device)
 
+    epoch = -1
     if restore_step:
         ckpt_path = os.path.join(
             config["train"]["path"]["ckpt_path"],
@@ -105,6 +108,7 @@ def get_model(
         generator_model.load_state_dict(ckpt["generator_model"])
         mpd_model.load_state_dict(ckpt["mpd_model"])
         msd_model.load_state_dict(ckpt["msd_model"])
+        epoch = ckpt["epoch"]
 
     if train:
         scheduled_optim = ScheduledOptim(
@@ -117,7 +121,7 @@ def get_model(
             msd_model,
             config["train"],
             config["model"],
-            restore_step
+            epoch,
         )
         if restore_step:
             scheduled_optim.load_state_dict(ckpt["optimizer"])
@@ -128,7 +132,7 @@ def get_model(
         generator_model.train()
         mpd_model.train()
         msd_model.train()
-        return variance_model, embedder_model, decoder_model, extractor_model, generator_model, mpd_model, msd_model, scheduled_optim
+        return variance_model, embedder_model, decoder_model, extractor_model, generator_model, mpd_model, msd_model, scheduled_optim, epoch
 
     variance_model.eval()
     embedder_model.eval()
@@ -140,7 +144,7 @@ def get_model(
     embedder_model.requires_grad_ = False
     decoder_model.requires_grad_ = False
     generator_model.requires_grad_ = False
-    return variance_model, embedder_model, decoder_model, extractor_model, generator_model, None, None, None
+    return variance_model, embedder_model, decoder_model, extractor_model, generator_model, None, None, None, epoch
 
 
 def get_param_num(model: nn.Module) -> int:

@@ -21,13 +21,8 @@ class TrainConfigPath(TypedDict):
 class TrainConfigOptimizer(TypedDict):
     batch_size: int
     betas: Tuple[float, float]
-    eps: float
-    weight_decay: float
-    grad_clip_thresh: float
-    grad_acc_step: int
-    warm_up_step: int
-    anneal_steps: List[int]
-    anneal_rate: float
+    learning_rate: float
+    lr_decay: float
 
 
 class TrainConfigStep(TypedDict):

@@ -248,7 +248,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
     )
 
     # Prepare model
-    variance_model, embedder_model, decoder_model, extractor_model, generator_model, mpd_model, msd_model, optimizer = \
+    variance_model, embedder_model, decoder_model, extractor_model, generator_model, mpd_model, msd_model, optimizer, epoch = \
         get_model(restore_step, config, device, speaker_num, train=True)
     length_regulator = GaussianUpsampling().to(device)
     preprocess_config = config["preprocess"]
@@ -283,9 +283,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
     # Training
     step = restore_step + 1
-    epoch = 1
-    grad_acc_step = config["train"]["optimizer"]["grad_acc_step"]
-    grad_clip_thresh = config["train"]["optimizer"]["grad_clip_thresh"]
+    epoch = max(1, epoch)
     total_step = config["train"]["step"]["total_step"]
     log_step = config["train"]["step"]["log_step"]
     save_step = config["train"]["step"]["save_step"]
@@ -382,7 +380,6 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                 # Discriminator Loss
                 loss_disc_all, loss_disc_s, loss_disc_f = discriminator_loss(y_df_hat_r, y_df_hat_g, y_ds_hat_r, y_ds_hat_g)
-                loss_disc_all /= grad_acc_step
                 loss_disc_all.backward()
 
                 # Variance & Generator Loss
@@ -413,22 +410,11 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 total_loss = variance_loss_all + bin_loss + loss_gen_all
 
                 # Backward
-                total_loss = total_loss / grad_acc_step
                 total_loss.backward()
 
-                if step % grad_acc_step == 0:
-                    # Clipping gradients to avoid gradient explosion
-                    nn.utils.clip_grad_norm_(variance_model.parameters(), grad_clip_thresh)
-                    nn.utils.clip_grad_norm_(embedder_model.parameters(), grad_clip_thresh)
-                    nn.utils.clip_grad_norm_(decoder_model.parameters(), grad_clip_thresh)
-                    nn.utils.clip_grad_norm_(extractor_model.parameters(), grad_clip_thresh)
-                    nn.utils.clip_grad_norm_(generator_model.parameters(), grad_clip_thresh)
-                    nn.utils.clip_grad_norm_(mpd_model.parameters(), grad_clip_thresh)
-                    nn.utils.clip_grad_norm_(msd_model.parameters(), grad_clip_thresh)
-
-                    # Update weights
-                    optimizer.step_and_update_lr()
-                    optimizer.zero_grad()
+                # Update weights
+                optimizer.zero_grad()
+                optimizer.step_and_update_lr()
 
                 if rank == 0:
                     if step % log_step == 0:
@@ -542,6 +528,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                                     "generator": optimizer._generator_optimizer.state_dict(),
                                     "discriminator": optimizer._discriminator_optimizer.state_dict(),
                                 },
+                                "epoch": epoch - 1,
                             },
                             os.path.join(
                                 config["train"]["path"]["ckpt_path"],

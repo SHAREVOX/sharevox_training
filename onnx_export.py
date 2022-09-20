@@ -125,7 +125,7 @@ if __name__ == '__main__':
         open(args.config, "r"), Loader=yaml.FullLoader
     )
 
-    variance_model, embedder_model, decoder_model, _, generator_model, _, _, _ = get_model(args.restore_step, config, device, args.speaker_num, False)
+    variance_model, embedder_model, decoder_model, _, generator_model, _, _, _, _ = get_model(args.restore_step, config, device, args.speaker_num, False)
     gaussian_model = GaussianUpsampling()
     gaussian_model = gaussian_model.eval()
     with open(
