@@ -462,17 +462,19 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         log(train_logger, step, loss_dict=loss_dict)
 
                     if step % synth_step == 0:
-                        wav_outputs = generator_model(outputs[0].unsqueeze(0).transpose(1, 2))
-                        mel_from_wavs = mel_spectrogram(
-                            y=wav_outputs.squeeze(1),
-                            n_fft=preprocess_config["stft"]["filter_length"],
-                            num_mels=preprocess_config["mel"]["n_mel_channels"],
-                            sampling_rate=preprocess_config["audio"]["sampling_rate"],
-                            hop_size=preprocess_config["stft"]["hop_length"],
-                            win_size=preprocess_config["stft"]["win_length"],
-                            fmin=preprocess_config["mel"]["mel_fmin"],
-                            fmax=preprocess_config["mel"]["mel_fmax"]
-                        ).transpose(1, 2)
+                        torch.cuda.empty_cache()
+                        with torch.no_grad():
+                            wav_outputs = generator_model(outputs[0].unsqueeze(0).transpose(1, 2))
+                            mel_from_wavs = mel_spectrogram(
+                                y=wav_outputs.squeeze(1),
+                                n_fft=preprocess_config["stft"]["filter_length"],
+                                num_mels=preprocess_config["mel"]["n_mel_channels"],
+                                sampling_rate=preprocess_config["audio"]["sampling_rate"],
+                                hop_size=preprocess_config["stft"]["hop_length"],
+                                win_size=preprocess_config["stft"]["win_length"],
+                                fmin=preprocess_config["mel"]["mel_fmin"],
+                                fmax=preprocess_config["mel"]["mel_fmax"]
+                            ).transpose(1, 2)
                         fig, tag = plot_one_sample(
                             ids=ids,
                             duration_targets=durations,
@@ -507,9 +509,11 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         decoder_model.eval()
                         extractor_model.eval()
                         generator_model.eval()
-                        message = evaluate(
-                            variance_model, embedder_model, decoder_model, extractor_model, generator_model, length_regulator, step, config, val_logger
-                        )
+                        torch.cuda.empty_cache()
+                        with torch.no_grad():
+                            message = evaluate(
+                                variance_model, embedder_model, decoder_model, extractor_model, generator_model, length_regulator, step, config, val_logger
+                            )
                         with open(os.path.join(val_log_path, "log.txt"), "a") as f:
                             f.write(message + "\n")
                         outer_bar.write(message)
