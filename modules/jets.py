@@ -74,10 +74,8 @@ class PitchAndDurationPredictor(BaseModule):
         encoder_type = model_config["variance_encoder_type"]
         if encoder_type == "conformer":
             self.encoder = ConformerEncoder(model_config["variance_encoder"])
-            self.encoder_with_accent = ConformerEncoder(model_config["variance_encoder"])
         elif encoder_type == "transformer":
             self.encoder = TransformerEncoder(model_config["variance_encoder"])
-            self.encoder_with_accent = TransformerEncoder(model_config["variance_encoder"])
         else:
             raise ValueError("unknown encoder: " + encoder_type)
 
@@ -108,7 +106,7 @@ class PitchAndDurationPredictor(BaseModule):
 
         # predict pitches with a phoneme and an accent
         pitches_args = self.__forward_preprocessing(
-            phonemes, speakers, phoneme_embedding + accent_embedding, x_masks, phoneme_lens, max_phoneme_len, True)
+            phonemes, speakers, phoneme_embedding + accent_embedding, x_masks, phoneme_lens, max_phoneme_len)
         pitches: Tensor = self.pitch_predictor(
             pitches_args[0], pitches_args[1].unsqueeze(-1))
 
@@ -128,12 +126,8 @@ class PitchAndDurationPredictor(BaseModule):
         x_masks: Tensor,
         phoneme_lens: Optional[LongTensor] = None,
         max_phoneme_len: Optional[LongTensor] = None,
-        with_accent: bool = False,
     ):
-        if with_accent:
-            hs, _ = self.encoder_with_accent(x, x_masks)  # (B, Tmax, adim) -> torch.Size()
-        else:
-            hs, _ = self.encoder(x, x_masks)    # (B, Tmax, adim) -> torch.Size()
+        hs, _ = self.encoder(x, x_masks)    # (B, Tmax, adim) -> torch.Size()
 
         if max_phoneme_len is None:
             hs = hs + self.speaker_embedding(speakers).unsqueeze(1).expand(
