@@ -16,7 +16,6 @@ class ScheduledOptim:
         variance_model: PitchAndDurationPredictor,
         embedder_model: FeatureEmbedder,
         decoder_model: MelSpectrogramDecoder,
-        extractor_model: PitchAndDurationExtractor,
         generator_model: VocoderGenerator,
         mpd_model: VocoderMultiPeriodDiscriminator,
         msd_model: VocoderMultiScaleDiscriminator,
@@ -33,7 +32,6 @@ class ScheduledOptim:
         self._variance_optimizer = torch.optim.AdamW(variance_model.parameters(), lr=lr, betas=betas)
         self._embedder_optimizer = torch.optim.AdamW(embedder_model.parameters(), lr=lr, betas=betas)
         self._decoder_optimizer = torch.optim.AdamW(decoder_model.parameters(), lr=lr, betas=betas)
-        self._extractor_optimizer = torch.optim.AdamW(extractor_model.parameters(), lr=lr, betas=betas)
         self._generator_optimizer = torch.optim.AdamW(generator_model.parameters(), lr=lr, betas=betas)
         self._discriminator_optimizer = torch.optim.AdamW(
             itertools.chain(msd_model.parameters(), mpd_model.parameters()), lr=lr, betas=betas
@@ -45,7 +43,6 @@ class ScheduledOptim:
             self._variance_scheduler = None
             self._embedder_scheduler = None
             self._decoder_scheduler = None
-            self._extractor_scheduler = None
             self._generator_scheduler = None
             self._discriminator_scheduler = None
 
@@ -59,9 +56,6 @@ class ScheduledOptim:
         self._decoder_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             self._decoder_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
         )
-        self._extractor_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self._extractor_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
-        )
         self._generator_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             self._generator_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
         )
@@ -73,7 +67,6 @@ class ScheduledOptim:
         self._variance_optimizer.step()
         self._embedder_optimizer.step()
         self._decoder_optimizer.step()
-        self._extractor_optimizer.step()
         self._generator_optimizer.step()
         self._discriminator_optimizer.step()
         self._update_learning_rate()
@@ -82,7 +75,6 @@ class ScheduledOptim:
         self._variance_optimizer.zero_grad()
         self._embedder_optimizer.zero_grad()
         self._decoder_optimizer.zero_grad()
-        self._extractor_optimizer.zero_grad()
         self._generator_optimizer.zero_grad()
         self._discriminator_optimizer.zero_grad()
 
@@ -90,7 +82,6 @@ class ScheduledOptim:
         self._variance_optimizer.load_state_dict(path["variance"])
         self._embedder_optimizer.load_state_dict(path["embedder"])
         self._decoder_optimizer.load_state_dict(path["decoder"])
-        self._extractor_optimizer.load_state_dict(path["extractor"])
         self._generator_optimizer.load_state_dict(path["generator"])
         self._discriminator_optimizer.load_state_dict(path["discriminator"])
 
@@ -101,6 +92,5 @@ class ScheduledOptim:
         self._variance_scheduler.step()
         self._embedder_scheduler.step()
         self._decoder_scheduler.step()
-        self._extractor_scheduler.step()
         self._generator_scheduler.step()
         self._discriminator_scheduler.step()

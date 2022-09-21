@@ -38,7 +38,7 @@ class Variance(nn.Module):
         accents: Tensor,
         speakers: Tensor,
     ):
-        pitches, log_durations, _ = self.variance_model(phonemes, accents, speakers)
+        pitches, log_durations = self.variance_model(phonemes, accents, speakers)
         pitches = torch.log(pitches * self.pitch_std + self.pitch_mean)
         durations = torch.clamp((torch.exp(log_durations) - 1) / (self.sampling_rate / self.hop_length), min=0.01)
         return pitches, durations
@@ -61,7 +61,7 @@ class Embedder(nn.Module):
         speakers: Tensor,
     ):
         pitches = (torch.exp(pitches) - self.pitch_mean) / self.pitch_std
-        feature_embedded = self.embedder_model(phonemes, pitches.unsqueeze(-1), speakers)
+        feature_embedded, _, _, _, _ = self.embedder_model(phonemes, pitches.unsqueeze(-1), speakers)
         return feature_embedded
 
 

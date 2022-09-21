@@ -6,8 +6,8 @@ import torch
 from torch import nn
 
 from dataset import TrainConfig
-from modules.jets import PitchAndDurationPredictor, PitchAndDurationExtractor, MelSpectrogramDecoder, \
-    ModelConfig, FeatureEmbedder, VocoderGenerator, VocoderMultiPeriodDiscriminator, VocoderMultiScaleDiscriminator
+from modules.jets import PitchAndDurationPredictor, MelSpectrogramDecoder, ModelConfig, \
+    FeatureEmbedder, VocoderGenerator, VocoderMultiPeriodDiscriminator, VocoderMultiScaleDiscriminator
 from modules.optimizer import ScheduledOptim
 from preprocessor import PreProcessConfig
 
@@ -29,7 +29,6 @@ def get_model(
     PitchAndDurationPredictor,
     FeatureEmbedder,
     MelSpectrogramDecoder,
-    PitchAndDurationExtractor,
     VocoderGenerator,
     VocoderMultiPeriodDiscriminator,
     VocoderMultiScaleDiscriminator,
@@ -50,7 +49,6 @@ def get_model(
     PitchAndDurationPredictor,
     FeatureEmbedder,
     MelSpectrogramDecoder,
-    PitchAndDurationExtractor,
     VocoderGenerator,
     None,
     None,
@@ -75,7 +73,6 @@ def get_model(
     variance_model = PitchAndDurationPredictor(config["model"], speaker_num).to(device)
     embedder_model = FeatureEmbedder(config["model"], speaker_num, pitch_min, pitch_max).to(device)
     decoder_model = MelSpectrogramDecoder(config["model"], config["preprocess"]["mel"]["n_mel_channels"]).to(device)
-    extractor_model = PitchAndDurationExtractor(config["model"]).to(device)
     vocoder_type = config["model"]["vocoder_type"]
     if config["model"]["mode"] == "mel":
         hidden_size = config["preprocess"]["mel"]["n_mel_channels"]
@@ -108,7 +105,6 @@ def get_model(
         variance_model.load_state_dict(ckpt["variance_model"])
         embedder_model.load_state_dict(ckpt["embedder_model"])
         decoder_model.load_state_dict(ckpt["decoder_model"])
-        extractor_model.load_state_dict(ckpt["extractor_model"])
         generator_model.load_state_dict(ckpt["generator_model"])
         mpd_model.load_state_dict(ckpt["mpd_model"])
         msd_model.load_state_dict(ckpt["msd_model"])
@@ -119,7 +115,6 @@ def get_model(
             variance_model,
             embedder_model,
             decoder_model,
-            extractor_model,
             generator_model,
             mpd_model,
             msd_model,
@@ -132,23 +127,21 @@ def get_model(
         variance_model.train()
         embedder_model.train()
         decoder_model.train()
-        extractor_model.train()
         generator_model.train()
         mpd_model.train()
         msd_model.train()
-        return variance_model, embedder_model, decoder_model, extractor_model, generator_model, mpd_model, msd_model, scheduled_optim, epoch
+        return variance_model, embedder_model, decoder_model, generator_model, mpd_model, msd_model, scheduled_optim, epoch
 
     variance_model.eval()
     embedder_model.eval()
     decoder_model.eval()
-    extractor_model.eval()
     generator_model.eval()
     generator_model.remove_weight_norm()
     variance_model.requires_grad_ = False
     embedder_model.requires_grad_ = False
     decoder_model.requires_grad_ = False
     generator_model.requires_grad_ = False
-    return variance_model, embedder_model, decoder_model, extractor_model, generator_model, None, None, None, epoch
+    return variance_model, embedder_model, decoder_model, generator_model, None, None, None, epoch
 
 
 def get_param_num(model: nn.Module) -> int:
