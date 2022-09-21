@@ -113,7 +113,7 @@ def evaluate(
                     h_masks=h_masks,
                     d_masks=d_masks,
                 )
-                outputs, _ = decoder_model(
+                outputs, postnet_outputs = decoder_model(
                     length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
@@ -129,7 +129,6 @@ def evaluate(
                     fmax=preprocess_config["mel"]["mel_fmax"],
                     val=True
                 ).transpose(1, 2)
-                # mel_from_outputs = mel_from_outputs[:,:mels.size(1),:]
 
                 # Cal Loss
                 variance_loss_all, duration_loss, pitch_loss, align_loss = variance_loss(
@@ -146,6 +145,11 @@ def evaluate(
                 align_loss += bin_loss
 
                 total_loss = variance_loss_all + bin_loss + (mel_loss * 45)
+
+                if config["model"]["mode"] == "mel":
+                    decoder_loss = F.l1_loss(mels, outputs)
+                    postnet_loss = F.l1_loss(mels, postnet_outputs)
+                    total_loss += decoder_loss + postnet_loss
 
                 loss_dict["total_loss"] = total_loss
                 loss_dict["mel_loss"] = mel_loss
@@ -352,13 +356,15 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     h_masks=h_masks,
                     d_masks=d_masks,
                 )
-                # TODO: Postnetを使ったらどうなるか
-                outputs, _ = decoder_model(
+                outputs, postnet_outputs = decoder_model(
                     length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
 
-                segmented_outputs, start_idxs = get_random_segments(outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
+                if config["model"]["mode"] == "mel":
+                    segmented_outputs, start_idxs = get_random_segments(postnet_outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
+                else:
+                    segmented_outputs, start_idxs = get_random_segments(outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
                 segumented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
 
                 wav_outputs = generator_model(segmented_outputs)
@@ -409,6 +415,11 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 align_loss += bin_loss
 
                 total_loss = variance_loss_all + (bin_loss * 2.0) + loss_gen_all
+
+                if config["model"]["mode"] == "mel":
+                    mel_loss = F.l1_loss(mels, outputs)
+                    postnet_loss = F.l1_loss(mels, postnet_outputs)
+                    total_loss += mel_loss + postnet_loss
 
                 # Backward
                 total_loss.backward()

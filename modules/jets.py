@@ -40,6 +40,7 @@ class ModelConfig(TypedDict):
     variance_embedding: VarianceEmbedding
     vocoder_type: VocoderType
     vocoder: VocoderConfig
+    mode: Literal["mel", "jets"]
 
 
 class BaseModule(nn.Module):
@@ -275,10 +276,11 @@ class FeatureEmbedder(BaseModule):
 
 
 class MelSpectrogramDecoder(BaseModule):
-    def __init__(self, model_config: ModelConfig):
+    def __init__(self, model_config: ModelConfig, mel_channels: int = 80):
         super(MelSpectrogramDecoder, self).__init__()
 
         hidden = model_config["decoder"]["hidden"]
+        self.mode = model_config["mode"]
 
         decoder_type = model_config["decoder_type"]
         if decoder_type == "conformer":
@@ -288,9 +290,10 @@ class MelSpectrogramDecoder(BaseModule):
         else:
             raise ValueError("unknown decoder: " + decoder_type)
 
-        # self.mel_channels = 80
-        # self.mel_linear = nn.Linear(hidden, self.mel_channels)
-        # self.postnet = Postnet()
+        if self.mode == "mel":
+            self.mel_channels = mel_channels
+            self.mel_linear = nn.Linear(hidden, self.mel_channels)
+            self.postnet = Postnet()
 
     def forward(
         self,
@@ -312,13 +315,16 @@ class MelSpectrogramDecoder(BaseModule):
             h_masks = None
 
         outputs, _ = self.decoder(length_regulated_tensor, h_masks)
-        # outputs = self.mel_linear(outputs).view(
-        #     outputs.size(0), -1, self.mel_channels
-        # )  # (B, T_feats, odim)
 
-        # postnet_outputs = outputs + self.postnet(
-        #     outputs.transpose(1, 2)
-        # ).transpose(1, 2)
-        postnet_outputs = None
+        if self.mode == "mel":
+            outputs = self.mel_linear(outputs).view(
+                outputs.size(0), -1, self.mel_channels
+            )  # (B, T_feats, odim)
+
+            postnet_outputs = outputs + self.postnet(
+                outputs.transpose(1, 2)
+            ).transpose(1, 2)
+        else:
+            postnet_outputs = None
 
         return outputs, postnet_outputs

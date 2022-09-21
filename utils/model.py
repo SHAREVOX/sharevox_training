@@ -74,10 +74,14 @@ def get_model(
     pitch_min, pitch_max = stats_json["pitch"][:2]
     variance_model = PitchAndDurationPredictor(config["model"], speaker_num).to(device)
     embedder_model = FeatureEmbedder(config["model"], speaker_num, pitch_min, pitch_max).to(device)
-    decoder_model = MelSpectrogramDecoder(config["model"]).to(device)
+    decoder_model = MelSpectrogramDecoder(config["model"], config["preprocess"]["mel"]["n_mel_channels"]).to(device)
     extractor_model = PitchAndDurationExtractor(config["model"]).to(device)
     vocoder_type = config["model"]["vocoder_type"]
-    hidden_size = config["model"]["decoder"]["hidden"]
+    if config["model"]["mode"] == "mel":
+        hidden_size = config["preprocess"]["mel"]["n_mel_channels"]
+    else:
+        hidden_size = config["model"]["decoder"]["hidden"]
+
     if vocoder_type == "fregan":
         import fregan
         generator_model = fregan.Generator(config["model"]["vocoder"], hidden_size)
