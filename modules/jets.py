@@ -151,7 +151,7 @@ class PitchAndDurationPredictor(BaseModule):
 class PitchAndDurationExtractor(nn.Module):
     def __init__(self, model_config: ModelConfig):
         super(PitchAndDurationExtractor, self).__init__()
-        hidden = model_config["variance_encoder"]["hidden"]
+        hidden = model_config["phoneme_encoder"]["hidden"]
 
         self.alignment_module = AlignmentModule(hidden, 80)
 
