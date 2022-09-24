@@ -40,7 +40,7 @@ class ModelConfig(TypedDict):
     variance_embedding: VarianceEmbedding
     vocoder_type: VocoderType
     vocoder: VocoderConfig
-    mode: Literal["mel", "jets"]
+    mode: Literal["alignment", "mel", "jets"]
 
 
 class BaseModule(nn.Module):
@@ -299,7 +299,7 @@ class MelSpectrogramDecoder(BaseModule):
         else:
             raise ValueError("unknown decoder: " + decoder_type)
 
-        if self.mode == "mel":
+        if self.mode != "jets":
             self.mel_channels = mel_channels
             self.mel_linear = nn.Linear(hidden, self.mel_channels)
             self.postnet = Postnet()
@@ -325,7 +325,7 @@ class MelSpectrogramDecoder(BaseModule):
 
         outputs, _ = self.decoder(length_regulated_tensor, h_masks)
 
-        if self.mode == "mel":
+        if self.mode != "jets":
             outputs = self.mel_linear(outputs).view(
                 outputs.size(0), -1, self.mel_channels
             )  # (B, T_feats, odim)

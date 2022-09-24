@@ -111,18 +111,21 @@ def evaluate(
                     length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
-                wav_outputs = generator_model(outputs.transpose(1, 2))
-                mel_from_outputs = mel_spectrogram(
-                    y=wav_outputs.squeeze(1),
-                    n_fft=preprocess_config["stft"]["filter_length"],
-                    num_mels=preprocess_config["mel"]["n_mel_channels"],
-                    sampling_rate=preprocess_config["audio"]["sampling_rate"],
-                    hop_size=preprocess_config["stft"]["hop_length"],
-                    win_size=preprocess_config["stft"]["win_length"],
-                    fmin=preprocess_config["mel"]["mel_fmin"],
-                    fmax=preprocess_config["mel"]["mel_fmax"],
-                    val=True
-                ).transpose(1, 2)
+                wav_outputs = None
+                mel_from_outputs = None
+                if config["model"]["mode"] != "alignment":
+                    wav_outputs = generator_model(outputs.transpose(1, 2))
+                    mel_from_outputs = mel_spectrogram(
+                        y=wav_outputs.squeeze(1),
+                        n_fft=preprocess_config["stft"]["filter_length"],
+                        num_mels=preprocess_config["mel"]["n_mel_channels"],
+                        sampling_rate=preprocess_config["audio"]["sampling_rate"],
+                        hop_size=preprocess_config["stft"]["hop_length"],
+                        win_size=preprocess_config["stft"]["win_length"],
+                        fmin=preprocess_config["mel"]["mel_fmin"],
+                        fmax=preprocess_config["mel"]["mel_fmax"],
+                        val=True
+                    ).transpose(1, 2)
 
                 # Cal Loss
                 variance_loss_all, duration_loss, pitch_loss, align_loss = variance_loss(
@@ -134,16 +137,22 @@ def evaluate(
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                mel_loss = F.l1_loss(mels, mel_from_outputs)
+                if config["model"]["mode"] != "jets":
+                    mel_loss = F.l1_loss(mels, mel_from_outputs)
 
                 align_loss += bin_loss
 
-                total_loss = variance_loss_all + bin_loss + (mel_loss * 45)
+                total_loss = variance_loss_all + bin_loss
 
-                if config["model"]["mode"] == "mel":
+                if config["model"]["mode"] != "jets":
                     decoder_loss = F.l1_loss(mels, outputs)
                     postnet_loss = F.l1_loss(mels, postnet_outputs)
                     total_loss += decoder_loss + postnet_loss
+
+                if config["model"]["mode"] != "alignment":
+                    total_loss += (mel_loss * 45)
+                else:
+                    mel_loss = postnet_loss
 
                 loss_dict["total_loss"] = total_loss
                 loss_dict["mel_loss"] = mel_loss
@@ -162,7 +171,7 @@ def evaluate(
                     duration_targets=durations,
                     pitch_targets=avg_pitches,
                     mel_targets=mels,
-                    mel_predictions=mel_from_outputs,
+                    mel_predictions=mel_from_outputs if config["model"]["mode"] != "alignment" else postnet_outputs,
                     phoneme_lens=phoneme_lens,
                     mel_lens=mel_lens
                 )
@@ -173,20 +182,21 @@ def evaluate(
                     tag="Validation/{}".format(tag),
                     step=step,
                 )
-                sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
-                log(
-                    logger,
-                    audio=wavs[0],
-                    sampling_rate=sampling_rate,
-                    tag="Validation/{}_gt".format(tag),
-                )
-                log(
-                    logger,
-                    audio=wav_outputs[0],
-                    sampling_rate=sampling_rate,
-                    tag="Validation/{}_synthesized".format(tag),
-                    step=step,
-                )
+                if config["model"]["mode"] != "alignment":
+                    sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
+                    log(
+                        logger,
+                        audio=wavs[0],
+                        sampling_rate=sampling_rate,
+                        tag="Validation/{}_gt".format(tag),
+                    )
+                    log(
+                        logger,
+                        audio=wav_outputs[0],
+                        sampling_rate=sampling_rate,
+                        tag="Validation/{}_synthesized".format(tag),
+                        step=step,
+                    )
             count += 1
 
     for key in loss_dict.keys():
@@ -349,33 +359,34 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     mel_lens=mel_lens,
                 )
 
-                if config["model"]["mode"] == "mel":
-                    segmented_outputs, start_idxs = get_random_segments(postnet_outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
-                else:
-                    segmented_outputs, start_idxs = get_random_segments(outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
-                segumented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
+                if config["model"]["mode"] != "alignment":
+                    if config["model"]["mode"] == "mel":
+                        segmented_outputs, start_idxs = get_random_segments(postnet_outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
+                    else:
+                        segmented_outputs, start_idxs = get_random_segments(outputs.transpose(1, 2), mel_lens, segment_size // hop_length)
+                    segumented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
 
-                wav_outputs = generator_model(segmented_outputs)
-                mel_from_outputs = mel_spectrogram(
-                    y=wav_outputs.squeeze(1),
-                    n_fft=preprocess_config["stft"]["filter_length"],
-                    num_mels=preprocess_config["mel"]["n_mel_channels"],
-                    sampling_rate=preprocess_config["audio"]["sampling_rate"],
-                    hop_size=preprocess_config["stft"]["hop_length"],
-                    win_size=preprocess_config["stft"]["win_length"],
-                    fmin=preprocess_config["mel"]["mel_fmin"],
-                    fmax=preprocess_config["mel"]["mel_fmax"],
-                    val=True
-                )
-                segumented_mels = get_segments(mels.transpose(1, 2), start_idxs, segment_size // hop_length)
+                    wav_outputs = generator_model(segmented_outputs)
+                    mel_from_outputs = mel_spectrogram(
+                        y=wav_outputs.squeeze(1),
+                        n_fft=preprocess_config["stft"]["filter_length"],
+                        num_mels=preprocess_config["mel"]["n_mel_channels"],
+                        sampling_rate=preprocess_config["audio"]["sampling_rate"],
+                        hop_size=preprocess_config["stft"]["hop_length"],
+                        win_size=preprocess_config["stft"]["win_length"],
+                        fmin=preprocess_config["mel"]["mel_fmin"],
+                        fmax=preprocess_config["mel"]["mel_fmax"],
+                        val=True
+                    )
+                    segumented_mels = get_segments(mels.transpose(1, 2), start_idxs, segment_size // hop_length)
 
-                y_df_hat_r, y_df_hat_g, _, _ = mpd_model(segumented_wavs, wav_outputs.detach())
-                y_ds_hat_r, y_ds_hat_g, _, _ = msd_model(segumented_wavs, wav_outputs.detach())
+                    y_df_hat_r, y_df_hat_g, _, _ = mpd_model(segumented_wavs, wav_outputs.detach())
+                    y_ds_hat_r, y_ds_hat_g, _, _ = msd_model(segumented_wavs, wav_outputs.detach())
 
-                # Discriminator Loss
-                loss_disc_all, loss_disc_s, loss_disc_f = discriminator_loss(y_df_hat_r, y_df_hat_g, y_ds_hat_r, y_ds_hat_g)
-                loss_disc_all = loss_disc_all * 2.0
-                loss_disc_all.backward()
+                    # Discriminator Loss
+                    loss_disc_all, loss_disc_s, loss_disc_f = discriminator_loss(y_df_hat_r, y_df_hat_g, y_ds_hat_r, y_ds_hat_g)
+                    loss_disc_all = loss_disc_all * 2.0
+                    loss_disc_all.backward()
 
                 # Variance & Generator Loss
                 variance_loss_all, duration_loss, pitch_loss, align_loss = variance_loss(
@@ -387,27 +398,31 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                _, y_df_hat_g, fmap_f_r, fmap_f_g = mpd_model(segumented_wavs, wav_outputs)
-                _, y_ds_hat_g, fmap_s_r, fmap_s_g = msd_model(segumented_wavs, wav_outputs)
-                loss_gen_all, loss_gen_s, loss_gen_f, loss_fm_s, loss_fm_f, loss_mel = generator_loss(
-                    mels=segumented_mels,
-                    mel_from_outputs=mel_from_outputs,
-                    y_df_hat_g=y_df_hat_g,
-                    fmap_f_r=fmap_f_r,
-                    fmap_f_g=fmap_f_g,
-                    y_ds_hat_g=y_ds_hat_g,
-                    fmap_s_r=fmap_s_r,
-                    fmap_s_g=fmap_s_g,
-                )
+                if config["model"]["mode"] != "alignment":
+                    _, y_df_hat_g, fmap_f_r, fmap_f_g = mpd_model(segumented_wavs, wav_outputs)
+                    _, y_ds_hat_g, fmap_s_r, fmap_s_g = msd_model(segumented_wavs, wav_outputs)
+                    loss_gen_all, loss_gen_s, loss_gen_f, loss_fm_s, loss_fm_f, loss_mel = generator_loss(
+                        mels=segumented_mels,
+                        mel_from_outputs=mel_from_outputs,
+                        y_df_hat_g=y_df_hat_g,
+                        fmap_f_r=fmap_f_r,
+                        fmap_f_g=fmap_f_g,
+                        y_ds_hat_g=y_ds_hat_g,
+                        fmap_s_r=fmap_s_r,
+                        fmap_s_g=fmap_s_g,
+                    )
 
                 align_loss += bin_loss
 
-                total_loss = variance_loss_all + (bin_loss * 2.0) + loss_gen_all
+                total_loss = variance_loss_all + (bin_loss * 2.0)
 
-                if config["model"]["mode"] == "mel":
+                if config["model"]["mode"] != "jets":
                     mel_loss = F.l1_loss(mels, outputs)
                     postnet_loss = F.l1_loss(mels, postnet_outputs)
                     total_loss += mel_loss + postnet_loss
+
+                if config["model"]["mode"] != "alignment":
+                    total_loss += loss_gen_all
 
                 # Backward
                 total_loss.backward()
@@ -418,8 +433,12 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                 if rank == 0:
                     if step % log_step == 0:
+                        if config["model"]["mode"] != "alignment":
+                            total_loss += loss_disc_all
+                        else:
+                            loss_mel = postnet_loss
                         loss_dict: LossDict = {
-                            "total_loss": total_loss + loss_disc_all,
+                            "total_loss": total_loss,
                             "mel_loss": loss_mel,
                             "duration_loss": duration_loss,
                             "pitch_loss": pitch_loss,
@@ -448,25 +467,26 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         log(train_logger, step, loss_dict=loss_dict)
 
                     if step % synth_step == 0:
-                        torch.cuda.empty_cache()
-                        with torch.no_grad():
-                            wav_outputs = generator_model(outputs[0].unsqueeze(0).transpose(1, 2))
-                            mel_from_wavs = mel_spectrogram(
-                                y=wav_outputs.squeeze(1),
-                                n_fft=preprocess_config["stft"]["filter_length"],
-                                num_mels=preprocess_config["mel"]["n_mel_channels"],
-                                sampling_rate=preprocess_config["audio"]["sampling_rate"],
-                                hop_size=preprocess_config["stft"]["hop_length"],
-                                win_size=preprocess_config["stft"]["win_length"],
-                                fmin=preprocess_config["mel"]["mel_fmin"],
-                                fmax=preprocess_config["mel"]["mel_fmax"]
-                            ).transpose(1, 2)
+                        if config["model"]["mode"] != "alignment":
+                            torch.cuda.empty_cache()
+                            with torch.no_grad():
+                                wav_outputs = generator_model(outputs[0].unsqueeze(0).transpose(1, 2))
+                                mel_from_wavs = mel_spectrogram(
+                                    y=wav_outputs.squeeze(1),
+                                    n_fft=preprocess_config["stft"]["filter_length"],
+                                    num_mels=preprocess_config["mel"]["n_mel_channels"],
+                                    sampling_rate=preprocess_config["audio"]["sampling_rate"],
+                                    hop_size=preprocess_config["stft"]["hop_length"],
+                                    win_size=preprocess_config["stft"]["win_length"],
+                                    fmin=preprocess_config["mel"]["mel_fmin"],
+                                    fmax=preprocess_config["mel"]["mel_fmax"]
+                                ).transpose(1, 2)
                         fig, tag = plot_one_sample(
                             ids=ids,
                             duration_targets=durations,
                             pitch_targets=avg_pitches,
                             mel_targets=mels,
-                            mel_predictions=mel_from_wavs,
+                            mel_predictions=mel_from_wavs if config["model"]["mode"] != "alignment" else postnet_outputs,
                             phoneme_lens=phoneme_lens,
                             mel_lens=mel_lens
                         )
@@ -475,19 +495,20 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                             fig=fig,
                             tag="Training/step_{}_{}".format(step, tag),
                         )
-                        sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
-                        log(
-                            train_logger,
-                            audio=wavs[0],
-                            sampling_rate=sampling_rate,
-                            tag="Training/step_{}_{}_reconstructed".format(step, tag),
-                        )
-                        log(
-                            train_logger,
-                            audio=wav_outputs[0],
-                            sampling_rate=sampling_rate,
-                            tag="Training/step_{}_{}_synthesized".format(step, tag),
-                        )
+                        if config["model"]["mode"] != "alignment":
+                            sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
+                            log(
+                                train_logger,
+                                audio=wavs[0],
+                                sampling_rate=sampling_rate,
+                                tag="Training/step_{}_{}_reconstructed".format(step, tag),
+                            )
+                            log(
+                                train_logger,
+                                audio=wav_outputs[0],
+                                sampling_rate=sampling_rate,
+                                tag="Training/step_{}_{}_synthesized".format(step, tag),
+                            )
 
                     if step % val_step == 0:
                         variance_model.eval()
