@@ -13,7 +13,6 @@ class ScheduledOptim:
         variance_model: PitchAndDurationPredictor,
         embedder_model: FeatureEmbedder,
         decoder_model: MelSpectrogramDecoder,
-        extractor_model: PitchAndDurationExtractor,
         train_config: TrainConfig,
         model_config: ModelConfig,
         current_step: int
@@ -37,12 +36,6 @@ class ScheduledOptim:
             eps=train_config["optimizer"]["eps"],
             weight_decay=train_config["optimizer"]["weight_decay"],
         )
-        self._extractor_optimizer = torch.optim.Adam(
-            extractor_model.parameters(),
-            betas=train_config["optimizer"]["betas"],
-            eps=train_config["optimizer"]["eps"],
-            weight_decay=train_config["optimizer"]["weight_decay"],
-        )
 
         self.n_warmup_steps = train_config["optimizer"]["warm_up_step"]
         self.anneal_steps = train_config["optimizer"]["anneal_steps"]
@@ -55,20 +48,17 @@ class ScheduledOptim:
         self._variance_optimizer.step()
         self._embedder_optimizer.step()
         self._decoder_optimizer.step()
-        self._extractor_optimizer.step()
 
     def zero_grad(self) -> None:
         # print(self.init_lr)
         self._variance_optimizer.zero_grad()
         self._embedder_optimizer.zero_grad()
         self._decoder_optimizer.zero_grad()
-        self._extractor_optimizer.zero_grad()
 
     def load_state_dict(self, path: dict) -> None:
         self._variance_optimizer.load_state_dict(path["variance"])
         self._embedder_optimizer.load_state_dict(path["embedder"])
         self._decoder_optimizer.load_state_dict(path["decoder"])
-        self._extractor_optimizer.load_state_dict(path["extractor"])
 
     def _get_lr_scale(self) -> None:
         lr = np.min(
@@ -92,6 +82,4 @@ class ScheduledOptim:
         for param_group in self._embedder_optimizer.param_groups:
             param_group["lr"] = lr
         for param_group in self._decoder_optimizer.param_groups:
-            param_group["lr"] = lr
-        for param_group in self._extractor_optimizer.param_groups:
             param_group["lr"] = lr
