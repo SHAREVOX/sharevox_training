@@ -78,6 +78,7 @@ class FastSpeech2Loss(nn.Module):
         duration_loss = self.mse_criterion(log_duration_outputs, log_duration_targets)
         pitch_loss = self.mse_criterion(pitch_outputs, pitch_targets)
         forward_sum_loss = self.forward_sum_loss(log_p_attn, input_lens, output_lens)
+        forward_sum_loss *= 2.0  # loss scaling
 
         total_loss = mel_loss + postnet_mel_loss + duration_loss + pitch_loss + forward_sum_loss
 

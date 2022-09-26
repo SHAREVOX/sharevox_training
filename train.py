@@ -312,6 +312,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 )
                 losses = list(losses)
                 # align loss
+                bin_loss *= 2.0  # loss scaling
                 losses[5] = losses[5] + bin_loss
 
                 total_loss = losses[0] + bin_loss
