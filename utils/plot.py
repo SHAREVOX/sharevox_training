@@ -1,8 +1,10 @@
 from typing import List, Tuple
 
-from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt, use as matplotlib_use
 import numpy as np
 
+# https://python-climbing.com/runtimeerror_main_thread_is_not_in_main_loop/
+matplotlib_use('Agg')
 
 def plot_mel(
     data: List[Tuple[np.ndarray, np.ndarray]], titles: List[str]
