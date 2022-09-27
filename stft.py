@@ -1,14 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from torch.autograd import Variable
-import numpy as np
-from scipy.signal import get_window
-from scipy.io.wavfile import write
-from librosa.util import pad_center, tiny, normalize
 from librosa.filters import mel as librosa_mel_fn
-
-from typing import Tuple, Type, Optional
 
 
 def dynamic_range_compression(x: Tensor, C: int = 1, clip_val: float = 1e-5) -> Tensor:
