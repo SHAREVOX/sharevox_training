@@ -36,6 +36,7 @@ class TrainConfigStep(TypedDict):
     synth_step: int
     val_step: int
     save_step: int
+    variance_learn_start: int
 
 
 class TrainConfig(TypedDict):
