@@ -232,7 +232,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
     )
 
     # Prepare model
-    variance_model, embedder_model, decoder_model, optimizer = get_model(restore_step, config, device, speaker_num, train=True)
+    variance_model, embedder_model, decoder_model, optimizer, epoch = get_model(restore_step, config, device, speaker_num, train=True)
     length_regulator = GaussianUpsampling().to(device)
     if num_gpus > 1:
         variance_model = DistributedDataParallel(variance_model, device_ids=[rank]).to(device)
@@ -259,9 +259,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
     # Training
     step = restore_step + 1
-    epoch = 1
-    grad_acc_step = config["train"]["optimizer"]["grad_acc_step"]
-    grad_clip_thresh = config["train"]["optimizer"]["grad_clip_thresh"]
+    epoch = max(1, epoch)
     total_step = config["train"]["step"]["total_step"]
     log_step = config["train"]["step"]["log_step"]
     save_step = config["train"]["step"]["save_step"]
@@ -357,18 +355,11 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 }
 
                 # Backward
-                total_loss = total_loss / grad_acc_step
                 total_loss.backward()
 
-                if step % grad_acc_step == 0:
-                    # Clipping gradients to avoid gradient explosion
-                    nn.utils.clip_grad_norm_(variance_model.parameters(), grad_clip_thresh)
-                    nn.utils.clip_grad_norm_(embedder_model.parameters(), grad_clip_thresh)
-                    nn.utils.clip_grad_norm_(decoder_model.parameters(), grad_clip_thresh)
-
-                    # Update weights
-                    optimizer.step_and_update_lr()
-                    optimizer.zero_grad()
+                # Update weights
+                optimizer.step_and_update_lr()
+                optimizer.zero_grad()
 
                 if rank == 0:
                     if step % log_step == 0:
@@ -448,6 +439,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                                     "embedder": optimizer._embedder_optimizer.state_dict(),
                                     "decoder": optimizer._decoder_optimizer.state_dict(),
                                 },
+                                "epoch": epoch - 1,
                             },
                             os.path.join(
                                 config["train"]["path"]["ckpt_path"],
