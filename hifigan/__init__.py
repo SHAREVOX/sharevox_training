@@ -1,2 +1,1 @@
-from .models import Generator
-from .config import Config
+from .models import Generator, MultiScaleDiscriminator, MultiPeriodDiscriminator

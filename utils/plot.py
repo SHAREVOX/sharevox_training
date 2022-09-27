@@ -2,6 +2,7 @@ from typing import List, Tuple
 
 from matplotlib import pyplot as plt, use as matplotlib_use
 import numpy as np
+from torch import Tensor, LongTensor
 
 # https://python-climbing.com/runtimeerror_main_thread_is_not_in_main_loop/
 matplotlib_use('Agg')
@@ -37,3 +38,39 @@ def plot_mel(
         )
 
     return fig
+
+
+def expand(values: np.ndarray, durations: np.ndarray) -> np.ndarray:
+    out = list()
+    for value, d in zip(values, durations):
+        out += [value] * max(0, int(d))
+    return np.array(out)
+
+
+def plot_one_sample(
+    ids: List[str],
+    duration_targets: Tensor,
+    pitch_targets: Tensor,
+    mel_targets: Tensor,
+    mel_predictions: Tensor,
+    phoneme_lens: LongTensor,
+    mel_lens: LongTensor,
+) -> Tuple[plt.Figure, str]:
+    basename = ids[0]
+    phoneme_len = phoneme_lens[0].item()
+    mel_len = mel_lens[0].item()
+    mel_target = mel_targets[0, :mel_len].detach().transpose(0, 1)
+    mel_prediction = mel_predictions[0, :mel_len].detach().transpose(0, 1)
+    duration_target = duration_targets[0, :phoneme_len].detach().cpu().numpy()
+    pitch = pitch_targets[0, :phoneme_len].detach().cpu().numpy()
+    pitch = expand(pitch, duration_target)
+
+    fig = plot_mel(
+        [
+            (mel_prediction.cpu().numpy(), pitch),
+            (mel_target.cpu().numpy(), pitch),
+        ],
+        ["Synthesized Spectrogram", "Ground-Truth Spectrogram"],
+    )
+
+    return fig, basename

@@ -3,6 +3,7 @@ import os
 
 import torch
 import torch.multiprocessing as mp
+import torch.nn.functional as F
 import yaml
 from torch import nn
 from torch.distributed import init_process_group
@@ -14,11 +15,14 @@ from tqdm import tqdm
 import fregan
 from dataset import Dataset
 from modules.gaussian_upsampling import GaussianUpsampling
-from modules.loss import FastSpeech2Loss
+from modules.loss import FastSpeech2Loss, GeneratorLoss, DiscriminatorLoss
+from stft import mel_spectrogram
 from utils.logging import log, LossDict
 from utils.mask import make_non_pad_mask
 from utils.model import Config, get_model, get_param_num, get_vocoder
-from utils.synth import synth_one_sample
+
+from utils.plot import plot_one_sample
+from utils.random_segments import get_random_segments, get_segments
 from utils.tools import to_device, ReProcessedItemTorch
 
 torch.backends.cudnn.benchmark = True
@@ -28,11 +32,11 @@ def evaluate(
     variance_model: nn.Module,  # PitchAndDurationPredictor
     embedder_model: nn.Module,  # FeatureEmbedder
     decoder_model: nn.Module,  # MelSpectrogramDecoder
+    generator_model: nn.Module,  # {FreGAN|HifiGAN}Generator
     length_regulator: nn.Module,
     step: int,
     config: Config,
     logger: SummaryWriter,
-    vocoder: fregan.Generator = None,
 ):
     # Get dataset
     dataset = Dataset(
@@ -47,6 +51,8 @@ def evaluate(
         collate_fn=dataset.collate_fn,
     )
 
+    preprocess_config = config["preprocess"]
+
     # Get loss function
     Loss = FastSpeech2Loss().to(device)
 
@@ -57,7 +63,8 @@ def evaluate(
         "postnet_mel_loss": 0.0,
         "duration_loss": 0.0,
         "pitch_loss": 0.0,
-        "alignment_loss": 0.0
+        "alignment_loss": 0.0,
+        "generator_loss": 0.0,
     }
     count = 0
     for batchs in loader:
@@ -70,6 +77,7 @@ def evaluate(
                 phoneme_lens,
                 max_phoneme_len,
                 accents,
+                wavs,
                 mels,
                 mel_lens,
                 max_mel_len,
@@ -104,9 +112,21 @@ def evaluate(
                     length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
+                wav_outputs = generator_model(postnet_outputs.transpose(1, 2))
+                mel_from_outputs = mel_spectrogram(
+                    y=wav_outputs.squeeze(1),
+                    n_fft=preprocess_config["stft"]["filter_length"],
+                    num_mels=preprocess_config["mel"]["n_mel_channels"],
+                    sampling_rate=preprocess_config["audio"]["sampling_rate"],
+                    hop_size=preprocess_config["stft"]["hop_length"],
+                    win_size=preprocess_config["stft"]["win_length"],
+                    fmin=preprocess_config["mel"]["mel_fmin"],
+                    fmax=preprocess_config["mel"]["mel_fmax"],
+                    val=True
+                ).transpose(1, 2)
 
                 # Cal Loss
-                total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss, align_loss = Loss(
+                total_loss, duration_loss, pitch_loss, align_loss, mel_loss, postnet_mel_loss = Loss(
                     outputs=outputs,
                     postnet_outputs=postnet_outputs,
                     log_duration_outputs=log_duration_outputs,
@@ -121,6 +141,8 @@ def evaluate(
                 bin_loss *= 2.0
                 align_loss += bin_loss
 
+                gen_mel_loss = F.l1_loss(mels, mel_from_outputs) * 45
+
                 # total loss
                 total_loss += bin_loss
 
@@ -130,26 +152,26 @@ def evaluate(
                     "postnet_mel_loss": postnet_mel_loss,
                     "duration_loss": duration_loss,
                     "pitch_loss": pitch_loss,
-                    "alignment_loss": align_loss
+                    "alignment_loss": align_loss,
+                    "generator_loss": gen_mel_loss
                 }
 
                 for key in loss_dict.keys():
                     loss_value = loss_dict[key]
                     if loss_value is not None:
-                        loss_mean_dict[key] += loss_dict[key].item() * len(batch[0])
+                        loss_mean_dict[key] += loss_value.item() * len(batch[0])
+                    else:
+                        loss_mean_dict[key] = None
 
             if count < 5:
-                fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
+                fig, tag = plot_one_sample(
                     ids=ids,
                     duration_targets=durations,
                     pitch_targets=avg_pitches,
                     mel_targets=mels,
-                    mel_predictions=postnet_outputs,
+                    mel_predictions=mel_from_outputs if postnet_outputs is None else postnet_outputs,
                     phoneme_lens=phoneme_lens,
-                    mel_lens=mel_lens,
-                    vocoder=vocoder,
-                    config=config,
-                    synthesis_target=(step == int(config["train"]["step"]["val_step"]))
+                    mel_lens=mel_lens
                 )
 
                 log(
@@ -161,25 +183,32 @@ def evaluate(
                 sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
                 log(
                     logger,
-                    audio=wav_reconstruction,
+                    audio=wavs[0],
                     sampling_rate=sampling_rate,
                     tag="Validation/{}_gt".format(tag),
+                    step=step,
                 )
                 log(
                     logger,
-                    audio=wav_prediction,
+                    audio=wav_outputs[0],
                     sampling_rate=sampling_rate,
                     tag="Validation/{}_synthesized".format(tag),
                     step=step,
                 )
-            count += 1
+                count += 1
 
     for key in loss_mean_dict.keys():
         loss_value = loss_mean_dict[key]
         if loss_value is not None:
-            loss_mean_dict[key] = loss_mean_dict[key] / len(dataset)
+            loss_mean_dict[key] = loss_value / len(dataset)
 
     log(logger, step, loss_dict=loss_mean_dict)
+
+    print(loss_mean_dict)
+    for key in loss_mean_dict.keys():
+        loss_value = loss_mean_dict[key]
+        if loss_value is None:
+            loss_mean_dict[key] = 0.0
 
     message1 = "Validation Step {}, ".format(step)
     message2 = (
@@ -188,7 +217,8 @@ def evaluate(
         "Mel PostNet Loss: {postnet_mel_loss:.4f}, "
         "Duration Loss: {duration_loss:.4f}, "
         "Pitch Loss: {pitch_loss:.4f}, "
-        "Alignment Loss: {alignment_loss:.4f}"
+        "Alignment Loss: {alignment_loss:.4f}, "
+        "Generator Loss {generator_loss:.4f}"
     ).format(
         **loss_mean_dict
     )
@@ -232,20 +262,26 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
     )
 
     # Prepare model
-    variance_model, embedder_model, decoder_model, optimizer, epoch = get_model(restore_step, config, device, speaker_num, train=True)
+    variance_model, embedder_model, decoder_model, generator_model, mpd_model, msd_model, optimizer, epoch = \
+        get_model(restore_step, config, device, speaker_num, train=True)
     length_regulator = GaussianUpsampling().to(device)
     if num_gpus > 1:
         variance_model = DistributedDataParallel(variance_model, device_ids=[rank]).to(device)
         embedder_model = DistributedDataParallel(embedder_model, device_ids=[rank]).to(device)
         decoder_model = DistributedDataParallel(decoder_model, device_ids=[rank]).to(device)
+        generator_model = DistributedDataParallel(generator_model, device_ids=[rank]).to(device)
+        mpd_model = DistributedDataParallel(mpd_model, device_ids=[rank]).to(device)
+        msd_model = DistributedDataParallel(msd_model, device_ids=[rank]).to(device)
 
-    num_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model)
-    Loss = FastSpeech2Loss().to(device)
+    num_generate_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model) + get_param_num(generator_model)
+    num_discriminate_param = get_param_num(mpd_model) + get_param_num(msd_model)
+    fs2_loss = FastSpeech2Loss().to(device)
+    generator_loss = GeneratorLoss().to(device)
+    discriminator_loss = DiscriminatorLoss().to(device)
+
     if rank == 0:
-        print("Number of FastSpeech2 Parameters:", num_param)
-
-    # Load vocoder
-    vocoder = get_vocoder(device, config["model"]["vocoder_type"])
+        print("Number of JETS Generator Parameters:", num_generate_param)
+        print("Number of JETS Discriminator Parameters:", num_discriminate_param)
 
     # Init logger
     for p in config["train"]["path"].values():
@@ -266,6 +302,12 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
     synth_step = config["train"]["step"]["synth_step"]
     val_step = config["train"]["step"]["val_step"]
     variance_learn_start = config["train"]["step"]["variance_learn_start"]
+    disc_learn_start = config["train"]["step"]["disc_learn_start"]
+
+    segment_size = config["model"]["vocoder"]["segment_size"]
+    hop_length = config["preprocess"]["stft"]["hop_length"]
+
+    preprocess_config = config["preprocess"]
 
     if rank == 0:
         outer_bar = tqdm(total=total_step, desc="Training", position=0)
@@ -289,6 +331,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     phoneme_lens,
                     max_phoneme_len,
                     accents,
+                    wavs,
                     mels,
                     mel_lens,
                     max_mel_len,
@@ -325,8 +368,42 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     mel_lens=mel_lens,
                 )
 
+                segmented_outputs, start_idxs = get_random_segments(
+                    postnet_outputs.transpose(1, 2), mel_lens, segment_size // hop_length
+                )
+
+                segumented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
+
+                wav_outputs = generator_model(segmented_outputs)
+                mel_from_outputs = mel_spectrogram(
+                    y=wav_outputs.squeeze(1),
+                    n_fft=preprocess_config["stft"]["filter_length"],
+                    num_mels=preprocess_config["mel"]["n_mel_channels"],
+                    sampling_rate=preprocess_config["audio"]["sampling_rate"],
+                    hop_size=preprocess_config["stft"]["hop_length"],
+                    win_size=preprocess_config["stft"]["win_length"],
+                    fmin=preprocess_config["mel"]["mel_fmin"],
+                    fmax=preprocess_config["mel"]["mel_fmax"],
+                    val=True
+                )
+                segumented_mels = get_segments(mels.transpose(1, 2), start_idxs, segment_size // hop_length)
+
+                loss_disc_all = None
+                if step > disc_learn_start:
+                    optimizer.zero_grad_disc()
+                    y_df_hat_r, y_df_hat_g, _, _ = mpd_model(segumented_wavs, wav_outputs.detach())
+                    y_ds_hat_r, y_ds_hat_g, _, _ = msd_model(segumented_wavs, wav_outputs.detach())
+
+                    # Discriminator Loss
+                    loss_disc_all, loss_disc_s, loss_disc_f = discriminator_loss(y_df_hat_r, y_df_hat_g, y_ds_hat_r, y_ds_hat_g)
+                    loss_disc_all = loss_disc_all * 2.0  # loss scaling
+                    loss_disc_all.backward()
+                    optimizer.step_and_update_lr_disc()
+
                 # Cal Loss
-                total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss, align_loss = Loss(
+                optimizer.zero_grad_gen()
+
+                total_loss, duration_loss, pitch_loss, align_loss, mel_loss, postnet_mel_loss = fs2_loss(
                     outputs=outputs,
                     postnet_outputs=postnet_outputs,
                     log_duration_outputs=log_duration_outputs,
@@ -339,11 +416,27 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     output_lens=mel_lens,
                     variance_learn=variance_learn_start < step
                 )
-                # align loss
+
+                if step > disc_learn_start:
+                    _, y_df_hat_g, fmap_f_r, fmap_f_g = mpd_model(segumented_wavs, wav_outputs)
+                    _, y_ds_hat_g, fmap_s_r, fmap_s_g = msd_model(segumented_wavs, wav_outputs)
+                    loss_gen_all, _, _, _, _, _ = generator_loss(
+                        mels=segumented_mels,
+                        mel_from_outputs=mel_from_outputs,
+                        y_df_hat_g=y_df_hat_g,
+                        fmap_f_r=fmap_f_r,
+                        fmap_f_g=fmap_f_g,
+                        y_ds_hat_g=y_ds_hat_g,
+                        fmap_s_r=fmap_s_r,
+                        fmap_s_g=fmap_s_g,
+                    )
+                else:
+                    loss_gen_all = F.l1_loss(segumented_mels, mel_from_outputs) * 45  # loss scaling
+
                 bin_loss *= 2.0  # loss scaling
                 align_loss += bin_loss
 
-                total_loss = total_loss + bin_loss
+                total_loss = total_loss + bin_loss + loss_gen_all
 
                 loss_dict: LossDict = {
                     "total_loss": total_loss,
@@ -351,15 +444,16 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     "postnet_mel_loss": postnet_mel_loss,
                     "duration_loss": duration_loss,
                     "pitch_loss": pitch_loss,
-                    "alignment_loss": align_loss
+                    "alignment_loss": align_loss,
+                    "generator_loss": loss_gen_all,
+                    "discriminator_loss": loss_disc_all if loss_disc_all is not None else 0.0,
                 }
 
                 # Backward
                 total_loss.backward()
 
                 # Update weights
-                optimizer.step_and_update_lr()
-                optimizer.zero_grad()
+                optimizer.step_and_update_lr_gen()
 
                 if rank == 0:
                     if step % log_step == 0:
@@ -370,7 +464,9 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                             "Mel PostNet Loss: {postnet_mel_loss:.4f}, "
                             "Duration Loss: {duration_loss:.4f}, "
                             "Pitch Loss: {pitch_loss:.4f}, "
-                            "Alignment Loss: {alignment_loss:.4f}"
+                            "Alignment Loss: {alignment_loss:.4f}, "
+                            "Generator Loss {generator_loss:.4f}, "
+                            "Discriminator Loss {discriminator_loss:.4f}"
                         ).format(
                             **loss_dict
                         )
@@ -383,32 +479,58 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         log(train_logger, step, loss_dict=loss_dict)
 
                     if step % synth_step == 0:
-                        fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
+                        torch.cuda.empty_cache()
+                        with torch.no_grad():
+                            wav_outputs = generator_model(postnet_outputs[0].unsqueeze(0).transpose(1, 2))
+                            mel_from_wavs = mel_spectrogram(
+                                y=wav_outputs.squeeze(1),
+                                n_fft=preprocess_config["stft"]["filter_length"],
+                                num_mels=preprocess_config["mel"]["n_mel_channels"],
+                                sampling_rate=preprocess_config["audio"]["sampling_rate"],
+                                hop_size=preprocess_config["stft"]["hop_length"],
+                                win_size=preprocess_config["stft"]["win_length"],
+                                fmin=preprocess_config["mel"]["mel_fmin"],
+                                fmax=preprocess_config["mel"]["mel_fmax"]
+                            ).transpose(1, 2)
+
+                        fig, tag = plot_one_sample(
                             ids=ids,
                             duration_targets=durations,
                             pitch_targets=avg_pitches,
                             mel_targets=mels,
                             mel_predictions=postnet_outputs,
                             phoneme_lens=phoneme_lens,
-                            mel_lens=mel_lens,
-                            vocoder=vocoder,
-                            config=config
+                            mel_lens=mel_lens
                         )
                         log(
                             train_logger,
                             fig=fig,
-                            tag="Training/step_{}_{}".format(step, tag),
+                            tag="Training/postnet/step_{}_{}".format(step, tag),
+                        )
+                        fig, tag = plot_one_sample(
+                            ids=ids,
+                            duration_targets=durations,
+                            pitch_targets=avg_pitches,
+                            mel_targets=mels,
+                            mel_predictions=mel_from_wavs,
+                            phoneme_lens=phoneme_lens,
+                            mel_lens=mel_lens
+                        )
+                        log(
+                            train_logger,
+                            fig=fig,
+                            tag="Training/formwav/step_{}_{}".format(step, tag),
                         )
                         sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
                         log(
                             train_logger,
-                            audio=wav_reconstruction,
+                            audio=wavs[0],
                             sampling_rate=sampling_rate,
-                            tag="Training/step_{}_{}_reconstructed".format(step, tag),
+                            tag="Training/step_{}_{}_gt".format(step, tag),
                         )
                         log(
                             train_logger,
-                            audio=wav_prediction,
+                            audio=wav_outputs[0],
                             sampling_rate=sampling_rate,
                             tag="Training/step_{}_{}_synthesized".format(step, tag),
                         )
@@ -417,8 +539,10 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         variance_model.eval()
                         embedder_model.eval()
                         decoder_model.eval()
+                        generator_model.eval()
+                        torch.cuda.empty_cache()
                         message = evaluate(
-                            variance_model, embedder_model, decoder_model, length_regulator, step, config, val_logger, vocoder
+                            variance_model, embedder_model, decoder_model, generator_model, length_regulator, step, config, val_logger
                         )
                         with open(os.path.join(val_log_path, "log.txt"), "a") as f:
                             f.write(message + "\n")
@@ -427,6 +551,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         variance_model.train()
                         embedder_model.train()
                         decoder_model.train()
+                        generator_model.train()
 
                     if step % save_step == 0:
                         torch.save(
@@ -434,10 +559,15 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                                 "variance_model": (variance_model.module if num_gpus > 1 else variance_model).state_dict(),
                                 "embedder_model": (embedder_model.module if num_gpus > 1 else embedder_model).state_dict(),
                                 "decoder_model": (decoder_model.module if num_gpus > 1 else decoder_model).state_dict(),
+                                "generator_model": (generator_model.module if num_gpus > 1 else generator_model).state_dict(),
+                                "mpd_model": (mpd_model.module if num_gpus > 1 else mpd_model).state_dict(),
+                                "msd_model": (msd_model.module if num_gpus > 1 else msd_model).state_dict(),
                                 "optimizer": {
                                     "variance": optimizer._variance_optimizer.state_dict(),
                                     "embedder": optimizer._embedder_optimizer.state_dict(),
                                     "decoder": optimizer._decoder_optimizer.state_dict(),
+                                    "generator": optimizer._generator_optimizer.state_dict(),
+                                    "discriminator": optimizer._discriminator_optimizer.state_dict(),
                                 },
                                 "epoch": epoch - 1,
                             },

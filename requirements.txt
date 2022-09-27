@@ -9,6 +9,7 @@ scipy
 sklearn
 librosa
 pyyaml
+PyWavelets
 pyworld
 pyopenjtalk
 onnxruntime

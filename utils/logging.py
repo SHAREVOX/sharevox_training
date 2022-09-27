@@ -10,11 +10,14 @@ LossValue = Union[Tensor, np.ndarray, float]
 
 class LossDict(TypedDict):
     total_loss: LossValue
-    mel_loss: LossValue
-    postnet_mel_loss: LossValue
+    mel_loss: Optional[LossValue]
+    postnet_mel_loss: Optional[LossValue]
     duration_loss: LossValue
     pitch_loss: LossValue
     alignment_loss: LossValue
+    generator_loss: LossValue
+    discriminator_loss: Optional[LossValue]
+
 
 def log(
     logger: SummaryWriter,

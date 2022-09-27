@@ -6,6 +6,7 @@ from typing import TypedDict, Literal, Optional, Union
 
 import fregan
 import hifigan
+from fregan import VocoderConfig
 from modules.alignment import AlignmentModule, viterbi_decode, average_by_duration
 from modules.tacotron2.decoder import Postnet
 from modules.conformer.encoder import Encoder as ConformerEncoder
@@ -24,6 +25,8 @@ class VarianceEmbedding(TypedDict):
 
 VocoderType = Literal["fregan", "hifigan"]
 VocoderGenerator = Union[fregan.Generator, hifigan.Generator]
+VocoderMultiPeriodDiscriminator = Union[fregan.ResWiseMultiPeriodDiscriminator, hifigan.Generator]
+VocoderMultiScaleDiscriminator = Union[fregan.ResWiseMultiScaleDiscriminator, hifigan.Generator]
 
 
 class ModelConfig(TypedDict):
@@ -36,6 +39,7 @@ class ModelConfig(TypedDict):
     variance_predictor: VariancePredictorConfig
     variance_embedding: VarianceEmbedding
     vocoder_type: VocoderType
+    vocoder: VocoderConfig
 
 
 class BaseModule(nn.Module):
@@ -280,7 +284,7 @@ class FeatureEmbedder(BaseModule):
 
 
 class MelSpectrogramDecoder(BaseModule):
-    def __init__(self, model_config: ModelConfig):
+    def __init__(self, model_config: ModelConfig, mel_channels):
         super(MelSpectrogramDecoder, self).__init__()
 
         hidden = model_config["decoder"]["hidden"]
@@ -293,7 +297,7 @@ class MelSpectrogramDecoder(BaseModule):
         else:
             raise ValueError("unknown decoder: " + decoder_type)
 
-        self.mel_channels = 80
+        self.mel_channels = mel_channels
         self.mel_linear = nn.Linear(hidden, self.mel_channels)
         self.postnet = Postnet()
 
