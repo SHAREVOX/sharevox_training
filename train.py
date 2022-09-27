@@ -267,6 +267,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
     save_step = config["train"]["step"]["save_step"]
     synth_step = config["train"]["step"]["synth_step"]
     val_step = config["train"]["step"]["val_step"]
+    variance_learn_start = config["train"]["step"]["variance_learn_start"]
 
     if rank == 0:
         outer_bar = tqdm(total=total_step, desc="Training", position=0)
@@ -338,6 +339,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     log_p_attn=log_p_attn,
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
+                    variance_learn=variance_learn_start < step
                 )
                 # align loss
                 bin_loss *= 2.0  # loss scaling

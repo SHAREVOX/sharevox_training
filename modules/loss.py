@@ -36,6 +36,7 @@ class FastSpeech2Loss(nn.Module):
         log_p_attn: Tensor,
         input_lens: LongTensor,
         output_lens: LongTensor,
+        variance_learn: bool = True,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Calculate forward propagation.
 
@@ -50,6 +51,7 @@ class FastSpeech2Loss(nn.Module):
             log_p_attn (Tensor): Batch of log probability of attention matrix (B, T_feats, T_text).
             input_lens (LongTensor): Batch of the lengths of each input (B,).
             output_lens (LongTensor): Batch of the lengths of each target (B,).
+            variance_learn (bool): variance predictor learn or not
 
         Returns:
             Tensor: Total loss value.
@@ -81,7 +83,9 @@ class FastSpeech2Loss(nn.Module):
         forward_sum_loss = self.forward_sum_loss(log_p_attn, input_lens, output_lens)
         forward_sum_loss *= 2.0  # loss scaling
 
-        total_loss = mel_loss + postnet_mel_loss + duration_loss + pitch_loss + forward_sum_loss
+        total_loss = mel_loss + postnet_mel_loss + forward_sum_loss
+        if variance_learn:
+            total_loss += duration_loss + pitch_loss
 
         return total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss, forward_sum_loss
 
