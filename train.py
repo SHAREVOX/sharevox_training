@@ -15,7 +15,7 @@ import fregan
 from dataset import Dataset
 from modules.gaussian_upsampling import GaussianUpsampling
 from modules.loss import FastSpeech2Loss
-from utils.logging import log
+from utils.logging import log, LossDict
 from utils.mask import make_non_pad_mask
 from utils.model import Config, get_model, get_param_num, get_vocoder
 from utils.synth import synth_one_sample
@@ -51,7 +51,14 @@ def evaluate(
     Loss = FastSpeech2Loss().to(device)
 
     # Evaluation
-    loss_sums = [0 for _ in range(6)]
+    loss_mean_dict: LossDict = {
+        "total_loss": 0.0,
+        "mel_loss": 0.0,
+        "postnet_mel_loss": 0.0,
+        "duration_loss": 0.0,
+        "pitch_loss": 0.0,
+        "alignment_loss": 0.0
+    }
     count = 0
     for batchs in loader:
         for _batch in batchs:
@@ -99,7 +106,7 @@ def evaluate(
                 )
 
                 # Cal Loss
-                losses = Loss(
+                total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss, align_loss = Loss(
                     outputs=outputs,
                     postnet_outputs=postnet_outputs,
                     log_duration_outputs=log_duration_outputs,
@@ -111,15 +118,25 @@ def evaluate(
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                # align loss
-                losses = list(losses)
-                losses[5] = losses[5] + bin_loss
+                bin_loss *= 2.0
+                align_loss += bin_loss
 
                 # total loss
-                losses[0] = losses[0] + bin_loss
+                total_loss += bin_loss
 
-                for i in range(len(losses)):
-                    loss_sums[i] += losses[i].item() * len(batch[0])
+                loss_dict: LossDict = {
+                    "total_loss": total_loss,
+                    "mel_loss": mel_loss,
+                    "postnet_mel_loss": postnet_mel_loss,
+                    "duration_loss": duration_loss,
+                    "pitch_loss": pitch_loss,
+                    "alignment_loss": align_loss
+                }
+
+                for key in loss_dict.keys():
+                    loss_value = loss_dict[key]
+                    if loss_value is not None:
+                        loss_mean_dict[key] += loss_dict[key].item() * len(batch[0])
 
             if count < 5:
                 fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
@@ -157,14 +174,26 @@ def evaluate(
                 )
             count += 1
 
-    loss_means = [loss_sum / len(dataset) for loss_sum in loss_sums]
-    log(logger, step, losses=loss_means)
+    for key in loss_mean_dict.keys():
+        loss_value = loss_mean_dict[key]
+        if loss_value is not None:
+            loss_mean_dict[key] = loss_mean_dict[key] / len(dataset)
 
-    message = "Validation Step {}, Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}, Alignment Loss: {:.4f}".format(
-        *([step] + loss_means)
+    log(logger, step, loss_dict=loss_mean_dict)
+
+    message1 = "Validation Step {}, ".format(step)
+    message2 = (
+        "Total Loss: {total_loss:.4f}, "
+        "Mel Loss: {mel_loss:.4f}, "
+        "Mel PostNet Loss: {postnet_mel_loss:.4f}, "
+        "Duration Loss: {duration_loss:.4f}, "
+        "Pitch Loss: {pitch_loss:.4f}, "
+        "Alignment Loss: {alignment_loss:.4f}"
+    ).format(
+        **loss_mean_dict
     )
 
-    return message
+    return message1 + message2
 
 
 def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: int):
@@ -298,7 +327,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 )
 
                 # Cal Loss
-                losses = Loss(
+                total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss, align_loss = Loss(
                     outputs=outputs,
                     postnet_outputs=postnet_outputs,
                     log_duration_outputs=log_duration_outputs,
@@ -310,12 +339,20 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                losses = list(losses)
                 # align loss
                 bin_loss *= 2.0  # loss scaling
-                losses[5] = losses[5] + bin_loss
+                align_loss += bin_loss
 
-                total_loss = losses[0] + bin_loss
+                total_loss = total_loss + bin_loss
+
+                loss_dict: LossDict = {
+                    "total_loss": total_loss,
+                    "mel_loss": mel_loss,
+                    "postnet_mel_loss": postnet_mel_loss,
+                    "duration_loss": duration_loss,
+                    "pitch_loss": pitch_loss,
+                    "alignment_loss": align_loss
+                }
 
                 # Backward
                 total_loss = total_loss / grad_acc_step
@@ -333,10 +370,16 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                 if rank == 0:
                     if step % log_step == 0:
-                        losses = [l.item() for l in losses]
                         message1 = "Step {}/{}, ".format(step, total_step)
-                        message2 = "Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Duration Loss: {:.4f}, Pitch Loss: {:.4f}, Alignment Loss: {:.4f}".format(
-                            *losses
+                        message2 = (
+                            "Total Loss: {total_loss:.4f}, "
+                            "Mel Loss: {mel_loss:.4f}, "
+                            "Mel PostNet Loss: {postnet_mel_loss:.4f}, "
+                            "Duration Loss: {duration_loss:.4f}, "
+                            "Pitch Loss: {pitch_loss:.4f}, "
+                            "Alignment Loss: {alignment_loss:.4f}"
+                        ).format(
+                            **loss_dict
                         )
 
                         with open(os.path.join(train_log_path, "log.txt"), "a") as f:
@@ -344,7 +387,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
 
                         outer_bar.write(message1 + message2)
 
-                        log(train_logger, step, losses=losses)
+                        log(train_logger, step, loss_dict=loss_dict)
 
                     if step % synth_step == 0:
                         fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(

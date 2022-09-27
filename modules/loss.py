@@ -57,6 +57,7 @@ class FastSpeech2Loss(nn.Module):
             Tensor: Mel-spectrogram with Postnet loss value.
             Tensor: Duration predictor loss value.
             Tensor: Pitch predictor loss value.
+            Tensor: Forward sum loss value.
 
         """
         # apply mask to remove padded part
