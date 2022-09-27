@@ -15,39 +15,40 @@ class ScheduledOptim:
         decoder_model: MelSpectrogramDecoder,
         train_config: TrainConfig,
         model_config: ModelConfig,
-        current_step: int
+        last_epoch: int
     ):
+        betas = train_config["optimizer"]["betas"]
+        lr = train_config["optimizer"]["learning_rate"]
+        self.lr_decay = train_config["optimizer"]["lr_decay"]
+        self.last_epoch = last_epoch
 
-        self._variance_optimizer = torch.optim.Adam(
-            variance_model.parameters(),
-            betas=train_config["optimizer"]["betas"],
-            eps=train_config["optimizer"]["eps"],
-            weight_decay=train_config["optimizer"]["weight_decay"],
-        )
-        self._embedder_optimizer = torch.optim.Adam(
-            embedder_model.parameters(),
-            betas=train_config["optimizer"]["betas"],
-            eps=train_config["optimizer"]["eps"],
-            weight_decay=train_config["optimizer"]["weight_decay"],
-        )
-        self._decoder_optimizer = torch.optim.Adam(
-            decoder_model.parameters(),
-            betas=train_config["optimizer"]["betas"],
-            eps=train_config["optimizer"]["eps"],
-            weight_decay=train_config["optimizer"]["weight_decay"],
-        )
+        self._variance_optimizer = torch.optim.AdamW(variance_model.parameters(), lr=lr, betas=betas)
+        self._embedder_optimizer = torch.optim.AdamW(embedder_model.parameters(), lr=lr, betas=betas)
+        self._decoder_optimizer = torch.optim.AdamW(decoder_model.parameters(), lr=lr, betas=betas)
 
-        self.n_warmup_steps = train_config["optimizer"]["warm_up_step"]
-        self.anneal_steps = train_config["optimizer"]["anneal_steps"]
-        self.anneal_rate = train_config["optimizer"]["anneal_rate"]
-        self.current_step = current_step
-        self.init_lr = np.power(model_config["variance_encoder"]["hidden"], -0.5)
+        try:
+            self._set_scheduler()
+        except KeyError:
+            self._variance_scheduler = None
+            self._embedder_scheduler = None
+            self._decoder_scheduler = None
+
+    def _set_scheduler(self) -> None:
+        self._variance_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self._variance_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
+        )
+        self._embedder_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self._embedder_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
+        )
+        self._decoder_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self._decoder_optimizer, gamma=self.lr_decay, last_epoch=self.last_epoch
+        )
 
     def step_and_update_lr(self) -> None:
-        self._update_learning_rate()
         self._variance_optimizer.step()
         self._embedder_optimizer.step()
         self._decoder_optimizer.step()
+        self._update_learning_rate()
 
     def zero_grad(self) -> None:
         # print(self.init_lr)
@@ -59,27 +60,10 @@ class ScheduledOptim:
         self._variance_optimizer.load_state_dict(path["variance"])
         self._embedder_optimizer.load_state_dict(path["embedder"])
         self._decoder_optimizer.load_state_dict(path["decoder"])
-
-    def _get_lr_scale(self) -> None:
-        lr = np.min(
-            [
-                np.power(self.current_step, -0.5),
-                np.power(self.n_warmup_steps, -1.5) * self.current_step,
-            ]
-        )
-        for s in self.anneal_steps:
-            if self.current_step > s:
-                lr = lr * self.anneal_rate
-        return lr
+        self._set_scheduler()
 
     def _update_learning_rate(self) -> None:
         """ Learning rate scheduling per step """
-        self.current_step += 1
-        lr = self.init_lr * self._get_lr_scale()
-
-        for param_group in self._variance_optimizer.param_groups:
-            param_group["lr"] = lr
-        for param_group in self._embedder_optimizer.param_groups:
-            param_group["lr"] = lr
-        for param_group in self._decoder_optimizer.param_groups:
-            param_group["lr"] = lr
+        self._variance_scheduler.step()
+        self._embedder_scheduler.step()
+        self._decoder_scheduler.step()

@@ -75,14 +75,9 @@ train:
     tf_data_path: "./output/tf_data/JSUT"
   optimizer:
     batch_size: 16
-    betas: [ 0.9, 0.98 ]
-    eps: 0.000000001
-    weight_decay: 0.0
-    grad_clip_thresh: 1.0
-    grad_acc_step: 1
-    warm_up_step: 4000
-    anneal_steps: [ ]
-    anneal_rate: 1.0
+    betas: [ 0.8, 0.999 ]
+    learning_rate: 0.0002
+    lr_decay: 0.999
   step:
     total_step: 500000
     log_step: 100
