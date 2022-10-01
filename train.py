@@ -508,7 +508,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         log(
                             train_logger,
                             fig=fig,
-                            tag="Training/postnet/step_{}_{}".format(step, tag),
+                            tag="Training/step_{}_{}_postnet".format(step, tag),
                         )
                         fig, tag = plot_one_sample(
                             ids=ids,
@@ -522,7 +522,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         log(
                             train_logger,
                             fig=fig,
-                            tag="Training/formwav/step_{}_{}".format(step, tag),
+                            tag="Training/step_{}_{}_fromwav".format(step, tag),
                         )
                         sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
                         log(
