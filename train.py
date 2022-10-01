@@ -436,7 +436,10 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 bin_loss *= 2.0  # loss scaling
                 align_loss += bin_loss
 
-                total_loss = total_loss + bin_loss + loss_gen_all
+                if variance_learn_start < step:
+                    total_loss = total_loss + bin_loss + loss_gen_all
+                else:
+                    total_loss = total_loss + bin_loss
 
                 loss_dict: LossDict = {
                     "total_loss": total_loss,
