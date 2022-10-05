@@ -179,6 +179,20 @@ def evaluate(
                     mel_lens=mel_lens
                 )
 
+                fig_attn = plot_one_alignment(
+                    attn_priors=attn_priors,
+                    attn_soft=attn_soft,
+                    attn_hard=attn_hard,
+                    phoneme_lens=phoneme_lens,
+                    mel_lens=mel_lens,
+                )
+                log(
+                    logger,
+                    fig=fig_attn,
+                    tag="Validation/{}_attn".format(step, tag),
+                    step=step,
+                )
+
                 log(
                     logger,
                     fig=fig,
