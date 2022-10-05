@@ -6,7 +6,7 @@ import torch
 from torch import nn, device as TorchDevice
 
 from dataset import TrainConfig
-from modules.fastspeech2 import PitchAndDurationPredictor, MelSpectrogramDecoder, \
+from modules.jets import PitchAndDurationPredictor, MelSpectrogramDecoder, \
     ModelConfig, FeatureEmbedder, VocoderType, VocoderGenerator, VocoderMultiPeriodDiscriminator, \
     VocoderMultiScaleDiscriminator
 from modules.optimizer import ScheduledOptim

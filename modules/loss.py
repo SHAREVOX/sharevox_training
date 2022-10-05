@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn, Tensor, LongTensor
 
-from modules.fastspeech2 import VocoderType
+from modules.jets import VocoderType
 from utils.mask import make_non_pad_mask
 
 

@@ -10,7 +10,7 @@ import yaml
 from torch import nn, Tensor, LongTensor
 
 from fregan import Generator
-from modules.fastspeech2 import MelSpectrogramDecoder, PitchAndDurationPredictor, FeatureEmbedder, VocoderGenerator
+from modules.jets import MelSpectrogramDecoder, PitchAndDurationPredictor, FeatureEmbedder, VocoderGenerator
 from text import phoneme_to_id, accent_to_id
 from utils.model import Config, get_model, get_vocoder
 
