@@ -5,8 +5,6 @@
 
 from typing import Tuple, Optional, Union, Any, List
 
-import numpy as np
-from scipy.stats import betabinom
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor, LongTensor

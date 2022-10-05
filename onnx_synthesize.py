@@ -1,6 +1,5 @@
 import argparse
 
-import numpy
 from scipy.io import wavfile
 import numpy as np
 from pyopenjtalk import extract_fullcontext

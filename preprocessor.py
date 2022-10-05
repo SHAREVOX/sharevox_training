@@ -3,7 +3,6 @@ import random
 import json
 import argparse
 
-import librosa
 import torch
 import yaml
 from scipy.interpolate import interp1d

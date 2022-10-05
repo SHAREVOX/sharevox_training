@@ -1,14 +1,13 @@
 import json
 import os
-from typing import Optional, Union, Tuple, TypedDict, Literal, overload
+from typing import Tuple, TypedDict, overload
 
 import torch
-from torch import nn, device as TorchDevice
+from torch import nn
 
 from dataset import TrainConfig
-from modules.jets import PitchAndDurationPredictor, MelSpectrogramDecoder, \
-    ModelConfig, FeatureEmbedder, VocoderType, VocoderGenerator, VocoderMultiPeriodDiscriminator, \
-    VocoderMultiScaleDiscriminator
+from modules.jets import PitchAndDurationPredictor, MelSpectrogramDecoder, ModelConfig, FeatureEmbedder, \
+    VocoderGenerator, VocoderMultiPeriodDiscriminator, VocoderMultiScaleDiscriminator
 from modules.optimizer import ScheduledOptim
 from preprocessor import PreProcessConfig
 
@@ -138,25 +137,3 @@ def get_param_num(model: nn.Module) -> int:
     num_param = sum(param.numel() for param in model.parameters())
     return num_param
 
-
-def get_vocoder(device: TorchDevice, type: VocoderType = "fregan") -> VocoderGenerator:
-    if type == "fregan":
-        import fregan
-        config = fregan.Config()
-        vocoder = fregan.Generator(config)
-        ckpt = torch.load(f"fregan/g_0003000.pth.tar", map_location=device)
-        vocoder.load_state_dict(ckpt["generator"])
-        vocoder.eval()
-        vocoder.remove_weight_norm()
-    elif type == "hifigan":
-        import hifigan
-        config = hifigan.Config()
-        vocoder = hifigan.Generator(config)
-        ckpt = torch.load(f"hifigan/g_00445000", map_location=device)
-        vocoder.load_state_dict(ckpt["generator"])
-        vocoder.eval()
-        vocoder.remove_weight_norm()
-    else:
-        raise Exception(f"Unsupported vocoder: {type}")
-    vocoder.to(device)
-    return vocoder

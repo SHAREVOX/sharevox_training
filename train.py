@@ -19,7 +19,7 @@ from modules.loss import FastSpeech2Loss, GeneratorLoss, DiscriminatorLoss
 from stft import mel_spectrogram
 from utils.logging import log, LossDict
 from utils.mask import make_non_pad_mask
-from utils.model import Config, get_model, get_param_num, get_vocoder
+from utils.model import Config, get_model, get_param_num
 
 from utils.plot import plot_one_sample, plot_one_alignment
 from utils.random_segments import get_random_segments, get_segments

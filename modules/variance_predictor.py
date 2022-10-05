@@ -1,7 +1,6 @@
 from torch import nn, Tensor
 
 from typing import TypedDict, Optional
-from torchtyping import TensorType
 
 from modules.transformer.layer_norm import LayerNorm
 

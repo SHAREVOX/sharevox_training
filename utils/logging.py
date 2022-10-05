@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, Union, TypedDict
+from typing import Optional, Union, TypedDict
 
 import numpy as np
 from torch import Tensor

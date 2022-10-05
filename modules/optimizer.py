@@ -1,11 +1,10 @@
 import itertools
 
 import torch
-import numpy as np
 
 from dataset import TrainConfig
-from modules.jets import PitchAndDurationPredictor, PitchAndDurationExtractor, MelSpectrogramDecoder, \
-    ModelConfig, FeatureEmbedder, VocoderGenerator, VocoderMultiPeriodDiscriminator, VocoderMultiScaleDiscriminator
+from modules.jets import PitchAndDurationPredictor, MelSpectrogramDecoder, FeatureEmbedder, \
+    VocoderGenerator, VocoderMultiPeriodDiscriminator, VocoderMultiScaleDiscriminator
 
 
 class ScheduledOptim:

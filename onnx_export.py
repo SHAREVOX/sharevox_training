@@ -7,12 +7,11 @@ import numpy as np
 import torch
 import yaml
 
-from torch import nn, Tensor, LongTensor
+from torch import nn, Tensor
 
-from fregan import Generator
 from modules.jets import MelSpectrogramDecoder, PitchAndDurationPredictor, FeatureEmbedder, VocoderGenerator
 from text import phoneme_to_id, accent_to_id
-from utils.model import Config, get_model, get_vocoder
+from utils.model import Config, get_model
 
 from torch.onnx.symbolic_registry import _onnx_stable_opsets
 
