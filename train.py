@@ -203,7 +203,6 @@ def evaluate(
 
     log(logger, step, loss_dict=loss_mean_dict)
 
-    print(loss_mean_dict)
     for key in loss_mean_dict.keys():
         loss_value = loss_mean_dict[key]
         if loss_value is None:
