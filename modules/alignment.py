@@ -5,7 +5,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from numba import jit
+from numba import jit, prange
+from torch import Tensor
 
 
 class AlignmentModule(nn.Module):
@@ -15,113 +16,156 @@ class AlignmentModule(nn.Module):
 
     """
 
-    def __init__(self, adim, odim):
+    def __init__(self, adim: int, odim: int, temperature: float):
         super().__init__()
-        self.t_conv1 = nn.Conv1d(adim, adim, kernel_size=3, padding=1)
-        self.t_conv2 = nn.Conv1d(adim, adim, kernel_size=1, padding=0)
+        self.temperature = temperature
 
-        self.f_conv1 = nn.Conv1d(odim, adim, kernel_size=3, padding=1)
-        self.f_conv2 = nn.Conv1d(adim, adim, kernel_size=3, padding=1)
-        self.f_conv3 = nn.Conv1d(adim, adim, kernel_size=1, padding=0)
+        self.text_proj = nn.Sequential(
+            nn.Conv1d(
+                adim,
+                adim,
+                kernel_size=3,
+                bias=True,
+                padding=1
+            ),
+            nn.ReLU(),
+            nn.Conv1d(
+                adim,
+                adim,
+                kernel_size=1,
+                bias=True,
+                padding=0
+            ),
+        )
 
-    def forward(self, text, feats, x_masks=None):
+        self.feat_proj = nn.Sequential(
+            nn.Conv1d(
+                odim,
+                adim,
+                kernel_size=3,
+                bias=True,
+                padding=1,
+            ),
+            nn.ReLU(),
+            nn.Conv1d(
+                adim,
+                adim,
+                kernel_size=3,
+                bias=True,
+                padding=1,
+            ),
+            nn.ReLU(),
+            nn.Conv1d(
+                adim,
+                adim,
+                kernel_size=1,
+                bias=True,
+                padding=0,
+            ),
+        )
+
+        self.text_spk_proj = nn.Linear(adim, adim, bias=False)
+        self.feat_spk_proj = nn.Linear(adim, odim, bias=False)
+
+
+    def forward(self, texts: Tensor, feats: Tensor, x_masks: Tensor, attn_prior: Tensor, speaker_embed: Tensor):
         """Calculate alignment loss.
 
         Args:
             text (Tensor): Batched text embedding (B, T_text, adim).
             feats (Tensor): Batched acoustic feature (B, T_feats, odim).
             x_masks (Tensor): Mask tensor (B, T_text).
+            attn_prior (Tensor): prior for attention matrix.
+            speaker_embed (Tensor): speaker embedding for multi-speaker scheme.
 
         Returns:
-            Tensor: Log probability of attention matrix (B, T_feats, T_text).
+            attn (Tensor):attention mask.
+            attn_logprob (Tensor): log-prob attention mask.
 
         """
-        text = text.transpose(1, 2)
-        text = F.relu(self.t_conv1(text))
-        text = self.t_conv2(text)
-        text = text.transpose(1, 2)
+        texts = texts.transpose(1, 2)
+        texts = texts + self.text_spk_proj(speaker_embed.unsqueeze(1).expand(
+            -1, texts.shape[-1], -1
+        )).transpose(1, 2)
 
         feats = feats.transpose(1, 2)
-        feats = F.relu(self.f_conv1(feats))
-        feats = F.relu(self.f_conv2(feats))
-        feats = self.f_conv3(feats)
-        feats = feats.transpose(1, 2)
+        feats = feats + self.feat_spk_proj(speaker_embed.unsqueeze(1).expand(
+            -1, feats.shape[-1], -1
+        )).transpose(1, 2)
 
-        dist = feats.unsqueeze(2) - text.unsqueeze(1)
-        dist = torch.norm(dist, p=2, dim=3)
-        score = -dist
+        texts_enc = self.text_proj(texts)
+        feats_enc = self.feat_proj(feats)
+
+        # Simplistic Gaussian Isotopic Attention
+        attn = (feats_enc[:, :, :, None] - texts_enc[:, :, None]) ** 2  # B x n_attn_dims x T1 x T2
+        attn = -self.temperature * attn.sum(1, keepdim=True)
+
+        if attn_prior is not None:
+            # print(f"AlignmentEncoder \t| mel: {queries.shape} phone: {keys.shape} mask: {mask.shape} attn: {attn.shape} attn_prior: {attn_prior.shape}")
+            attn = F.log_softmax(attn, dim=-1) + torch.log(attn_prior[:, None] + 1e-8)
+            # print(f"AlignmentEncoder \t| After prior sum attn: {attn.shape}")
+
+        attn_logprob = attn.clone()
 
         if x_masks is not None:
-            x_masks = x_masks.unsqueeze(-2)
-            score = score.masked_fill(x_masks, -np.inf)
+            attn.data.masked_fill_(x_masks.permute(0, 2, 1).unsqueeze(2), -float("inf"))
 
-        log_p_attn = F.log_softmax(score, dim=-1)
-        return log_p_attn
+        attn = F.softmax(attn, dim=-1)
+        return attn, attn_logprob
 
 
 @jit(nopython=True)
-def _monotonic_alignment_search(log_p_attn):
-    # https://arxiv.org/abs/2005.11129
-    T_mel = log_p_attn.shape[0]
-    T_inp = log_p_attn.shape[1]
-    Q = np.full((T_inp, T_mel), fill_value=-np.inf)
+def mas_width1(attn_map: np.ndarray) -> np.ndarray:
+    """mas with hardcoded width=1"""
+    # assumes mel x text
+    opt = np.zeros_like(attn_map)
+    attn_map = np.log(attn_map)
+    attn_map[0, 1:] = -np.inf
+    log_p = np.zeros_like(attn_map)
+    log_p[0, :] = attn_map[0, :]
+    prev_ind = np.zeros_like(attn_map, dtype=np.int64)
+    for i in range(1, attn_map.shape[0]):
+        for j in range(attn_map.shape[1]): # for each text dim
+            prev_log = log_p[i - 1, j]
+            prev_j = j
 
-    log_prob = log_p_attn.transpose(1, 0)  # -> (T_inp,T_mel)
-    # 1.  Q <- init first row for all j
-    for j in range(T_mel):
-        Q[0, j] = log_prob[0, : j + 1].sum()
+            if j - 1 >= 0 and log_p[i - 1, j - 1] >= log_p[i - 1, j]:
+                prev_log = log_p[i - 1, j - 1]
+                prev_j = j - 1
 
-    # 2.
-    for j in range(1, T_mel):
-        for i in range(1, min(j + 1, T_inp)):
-            Q[i, j] = max(Q[i - 1, j - 1], Q[i, j - 1]) + log_prob[i, j]
+            log_p[i, j] = attn_map[i, j] + prev_log
+            prev_ind[i, j] = prev_j
 
-    # 3.
-    A = np.full((T_mel,), fill_value=T_inp - 1)
-    for j in range(T_mel - 2, -1, -1):  # T_mel-2, ..., 0
-        # 'i' in {A[j+1]-1, A[j+1]}
-        i_a = A[j + 1] - 1
-        i_b = A[j + 1]
-        if i_b == 0:
-            argmax_i = 0
-        elif Q[i_a, j] >= Q[i_b, j]:
-            argmax_i = i_a
-        else:
-            argmax_i = i_b
-        A[j] = argmax_i
-    return A
+    # now backtrack
+    curr_text_idx = attn_map.shape[1] - 1
+    for i in range(attn_map.shape[0] - 1, -1, -1):
+        opt[i, curr_text_idx] = 1
+        curr_text_idx = prev_ind[i, curr_text_idx]
+    opt[0, curr_text_idx] = 1
+    return opt
 
 
-def viterbi_decode(log_p_attn, text_lengths, feats_lengths):
-    """Extract duration from an attention probability matrix
+@jit(nopython=True, parallel=True)
+def b_mas(b_attn_map: np.ndarray, in_lens: np.ndarray, out_lens: np.ndarray, width: int = 1) -> np.ndarray:
+    assert width == 1
+    attn_out = np.zeros_like(b_attn_map)
 
+    for b in prange(b_attn_map.shape[0]):
+        out = mas_width1(b_attn_map[b, 0, : out_lens[b], : in_lens[b]])
+        attn_out[b, 0, : out_lens[b], : in_lens[b]] = out
+    return attn_out
+
+
+def binarize_attention_parallel(attn: Tensor, in_lens: Tensor, out_lens: Tensor) -> Tensor:
+    """For training purposes only. Binarizes attention with MAS.
+    These will no longer recieve a gradient.
     Args:
-        log_p_attn (Tensor): Batched log probability of attention
-            matrix (B, T_feats, T_text).
-        text_lengths (Tensor): Text length tensor (B,).
-        feats_legnths (Tensor): Feature length tensor (B,).
-
-    Returns:
-        Tensor: Batched token duration extracted from `log_p_attn` (B, T_text).
-        Tensor: Binarization loss tensor ().
-
+        attn: B x 1 x max_mel_len x max_text_len
     """
-    B = log_p_attn.size(0)
-    T_text = log_p_attn.size(2)
-    device = log_p_attn.device
-
-    bin_loss = 0
-    ds = torch.zeros((B, T_text), device=device)
-    for b in range(B):
-        cur_log_p_attn = log_p_attn[b, : feats_lengths[b], : text_lengths[b]]
-        viterbi = _monotonic_alignment_search(cur_log_p_attn.detach().cpu().numpy())
-        _ds = np.bincount(viterbi)
-        ds[b, : len(_ds)] = torch.from_numpy(_ds).to(device)
-
-        t_idx = torch.arange(feats_lengths[b])
-        bin_loss = bin_loss - cur_log_p_attn[t_idx, viterbi].mean()
-    bin_loss = bin_loss / B
-    return ds, bin_loss
+    with torch.no_grad():
+        attn_cpu = attn.data.cpu().numpy()
+        attn_out = b_mas(attn_cpu, in_lens.cpu().numpy(), out_lens.cpu().numpy(), width=1)
+    return torch.from_numpy(attn_out).to(attn.device)
 
 
 @jit(nopython=True)

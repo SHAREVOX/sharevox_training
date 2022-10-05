@@ -21,7 +21,7 @@ from utils.logging import log, LossDict
 from utils.mask import make_non_pad_mask
 from utils.model import Config, get_model, get_param_num, get_vocoder
 
-from utils.plot import plot_one_sample
+from utils.plot import plot_one_sample, plot_one_alignment
 from utils.random_segments import get_random_segments, get_segments
 from utils.tools import to_device, ReProcessedItemTorch
 
@@ -81,6 +81,7 @@ def evaluate(
                 mels,
                 mel_lens,
                 max_mel_len,
+                attn_priors,
                 pitches,
             ) = batch
             with torch.no_grad():
@@ -91,7 +92,7 @@ def evaluate(
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                 )
-                feature_embedded, avg_pitches, durations, log_p_attn, bin_loss = embedder_model(
+                feature_embedded, avg_pitches, durations, attn_soft, attn_hard, attn_logprob = embedder_model(
                     phonemes=phonemes,
                     pitches=pitches,
                     speakers=speakers,
@@ -99,6 +100,7 @@ def evaluate(
                     max_phoneme_len=max_phoneme_len,
                     mels=mels,
                     mel_lens=mel_lens,
+                    attn_priors=attn_priors,
                 )
                 h_masks = make_non_pad_mask(mel_lens).to(feature_embedded.device)
                 d_masks = make_non_pad_mask(phoneme_lens).to(durations.device)
@@ -122,7 +124,6 @@ def evaluate(
                     win_size=preprocess_config["stft"]["win_length"],
                     fmin=preprocess_config["mel"]["mel_fmin"],
                     fmax=preprocess_config["mel"]["mel_fmax"],
-                    val=True
                 ).transpose(1, 2)
 
                 # Cal Loss
@@ -134,17 +135,15 @@ def evaluate(
                     mel_targets=mels,
                     duration_targets=durations,
                     pitch_targets=avg_pitches,
-                    log_p_attn=log_p_attn,
+                    attn_soft=attn_soft,
+                    attn_hard=attn_hard,
+                    attn_logprob=attn_logprob,
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                 )
-                bin_loss *= 2.0
-                align_loss += bin_loss
 
-                gen_mel_loss = F.l1_loss(mels, mel_from_outputs) * 45
-
-                # total loss
-                total_loss += bin_loss
+                gen_mel_loss = F.l1_loss(mels, mel_from_outputs[:,:mels.size(1),:]) * 45
+                total_loss = total_loss + gen_mel_loss
 
                 loss_dict: LossDict = {
                     "total_loss": total_loss,
@@ -335,6 +334,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     mels,
                     mel_lens,
                     max_mel_len,
+                    attn_priors,
                     pitches,
                 ) = batch
 
@@ -346,7 +346,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                 )
-                feature_embedded, avg_pitches, durations, log_p_attn, bin_loss = embedder_model(
+                feature_embedded, avg_pitches, durations, attn_soft, attn_hard, attn_logprob = embedder_model(
                     phonemes=phonemes,
                     pitches=pitches,
                     speakers=speakers,
@@ -354,6 +354,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     max_phoneme_len=max_phoneme_len,
                     mels=mels,
                     mel_lens=mel_lens,
+                    attn_priors=attn_priors,
                 )
                 h_masks = make_non_pad_mask(mel_lens).to(feature_embedded.device)
                 d_masks = make_non_pad_mask(phoneme_lens).to(durations.device)
@@ -375,8 +376,8 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 segumented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
 
                 wav_outputs = generator_model(segmented_outputs)
-                mel_from_outputs = mel_spectrogram(
-                    y=wav_outputs.squeeze(1),
+                mel_func = lambda y: mel_spectrogram(
+                    y=y.squeeze(1),
                     n_fft=preprocess_config["stft"]["filter_length"],
                     num_mels=preprocess_config["mel"]["n_mel_channels"],
                     sampling_rate=preprocess_config["audio"]["sampling_rate"],
@@ -384,9 +385,10 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     win_size=preprocess_config["stft"]["win_length"],
                     fmin=preprocess_config["mel"]["mel_fmin"],
                     fmax=preprocess_config["mel"]["mel_fmax"],
-                    val=True
                 )
-                segumented_mels = get_segments(mels.transpose(1, 2), start_idxs, segment_size // hop_length)
+                mel_from_outputs = mel_func(wav_outputs)
+                # segumented_mels = get_segments(mels.transpose(1, 2), start_idxs, segment_size // hop_length)
+                segumented_mels = mel_func(segumented_wavs)
 
                 loss_disc_all = None
                 if step > disc_learn_start:
@@ -411,7 +413,9 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     mel_targets=mels,
                     duration_targets=durations,
                     pitch_targets=avg_pitches,
-                    log_p_attn=log_p_attn,
+                    attn_soft=attn_soft,
+                    attn_hard=attn_hard,
+                    attn_logprob=attn_logprob,
                     input_lens=phoneme_lens,
                     output_lens=mel_lens,
                     variance_learn=variance_learn_start < step
@@ -433,13 +437,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 else:
                     loss_gen_all = F.l1_loss(segumented_mels, mel_from_outputs) * 45  # loss scaling
 
-                bin_loss *= 2.0  # loss scaling
-                align_loss += bin_loss
-
-                if variance_learn_start < step:
-                    total_loss = total_loss + bin_loss + loss_gen_all
-                else:
-                    total_loss = total_loss + bin_loss
+                total_loss = total_loss + loss_gen_all
 
                 loss_dict: LossDict = {
                     "total_loss": total_loss,
@@ -503,12 +501,24 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                             mel_targets=mels,
                             mel_predictions=postnet_outputs,
                             phoneme_lens=phoneme_lens,
-                            mel_lens=mel_lens
+                            mel_lens=mel_lens,
                         )
                         log(
                             train_logger,
                             fig=fig,
                             tag="Training/step_{}_{}_postnet".format(step, tag),
+                        )
+                        fig_attn = plot_one_alignment(
+                            attn_priors=attn_priors,
+                            attn_soft=attn_soft,
+                            attn_hard=attn_hard,
+                            phoneme_lens=phoneme_lens,
+                            mel_lens=mel_lens,
+                        )
+                        log(
+                            train_logger,
+                            fig=fig_attn,
+                            tag="Training/step_{}_{}_attn".format(step, tag),
                         )
                         fig, tag = plot_one_sample(
                             ids=ids,

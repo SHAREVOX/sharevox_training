@@ -6,7 +6,7 @@ from torch.utils.data import Dataset as TorchDataset
 
 from preprocessor import PreProcessConfig
 from text import phoneme_to_id
-from utils.pad import pad_1D, pad_2D
+from utils.pad import pad_1D, pad_2D, pad_3D
 
 from typing import TypedDict, List, Tuple, Dict
 
@@ -48,6 +48,7 @@ class DatasetItem(TypedDict):
     accent: np.ndarray
     wav: np.ndarray
     mel: np.ndarray
+    attn_prior: np.ndarray
     pitch: np.ndarray
 
 
@@ -62,6 +63,7 @@ ReProcessedItem = Tuple[
     np.ndarray,
     np.ndarray,
     np.int64,
+    np.ndarray,
     np.ndarray,
 ]
 
@@ -121,6 +123,13 @@ class Dataset(TorchDataset):
             "mel",
             "{}-mel-{}.npy".format(speaker, basename),
         )
+        attn_prior_path = os.path.join(
+            self.preprocessed_path,
+            "attn_prior",
+            "{}-attn_prior-{}.npy".format(speaker, basename),
+        )
+        attn_prior = np.load(attn_prior_path)
+
         mel = np.load(mel_path)
         pitch_path = os.path.join(
             self.preprocessed_path,
@@ -136,6 +145,7 @@ class Dataset(TorchDataset):
             accent=accent,
             wav=wav,
             mel=mel,
+            attn_prior=attn_prior,
             pitch=pitch,
         )
 
@@ -164,6 +174,7 @@ class Dataset(TorchDataset):
         accents = [data[idx]["accent"] for idx in idxs]
         wavs = [data[idx]["wav"] for idx in idxs]
         mels = [data[idx]["mel"] for idx in idxs]
+        attn_priors = [data[idx]["attn_prior"] for idx in idxs]
         pitches = [data[idx]["pitch"] for idx in idxs]
 
         text_lens = np.array([text.shape[0] for text in texts])
@@ -174,6 +185,7 @@ class Dataset(TorchDataset):
         accents = pad_1D(accents)
         wavs = pad_1D(wavs)
         mels = pad_2D(mels)
+        attn_priors = pad_3D(attn_priors, len(idxs), max(text_lens), max(mel_lens))
         pitches = pad_1D(pitches)
 
         max_text_len: np.int64 = max(text_lens)
@@ -190,6 +202,7 @@ class Dataset(TorchDataset):
             mels,
             mel_lens,
             max_mel_len,
+            attn_priors,
             pitches,
         )
 

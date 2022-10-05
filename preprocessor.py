@@ -3,9 +3,11 @@ import random
 import json
 import argparse
 
+import librosa
 import torch
 import yaml
 from scipy.interpolate import interp1d
+from scipy.stats import betabinom
 
 from text import accent_to_id
 
@@ -70,6 +72,18 @@ def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> np.ndarray
     return wav
 
 
+def beta_binomial_prior_distribution(mel_count, phoneme_count, scaling_factor=1.0):
+    M, P = mel_count, phoneme_count
+    x = np.arange(0, M)
+    mel_text_probs = []
+    for i in range(1, P+1):
+        a, b = scaling_factor*i, scaling_factor*(P+1-i)
+        rv = betabinom(M, a, b)
+        mel_i_prob = rv.pmf(x)
+        mel_text_probs.append(mel_i_prob)
+    return np.array(mel_text_probs)
+
+
 class Preprocessor:
     def __init__(self, config: PreProcessConfig):
         self.config = config
@@ -84,6 +98,7 @@ class Preprocessor:
     def build_from_path(self) -> List[str]:
         os.makedirs((os.path.join(self.out_dir, "wav")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "mel")), exist_ok=True)
+        os.makedirs((os.path.join(self.out_dir, "attn_prior")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "pitch")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "accent")), exist_ok=True)
 
@@ -97,15 +112,6 @@ class Preprocessor:
         dirs = list(filter(lambda x: os.path.isdir(os.path.join(self.in_dir, x)), os.listdir(self.in_dir)))
         for i, speaker in enumerate(tqdm(dirs, desc="Dir", position=0)):
             speakers[speaker] = i
-            wavs = list(filter(lambda p: ".wav" in p, os.listdir(os.path.join(self.in_dir, speaker))))
-            for wav_name in tqdm(wavs, desc="File", position=1):
-                basename = wav_name.split(".")[0]
-                pitch, n = self.process_utterance(speaker, basename)
-
-                if len(pitch) > 0:
-                    pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
-
-                n_frames += n
 
             # phoneme
             phoneme_path = os.path.join(self.text_dir, speaker, "phoneme.csv")
@@ -121,6 +127,17 @@ class Preprocessor:
                 basenames = [text.split(",")[0] for text in accents]
                 # 前後の無音区間のアクセント区切りをつけ足す
                 accents = ["# " + text.split(",")[1] + " #" for text in accents]
+
+            wavs = list(filter(lambda p: ".wav" in p, os.listdir(os.path.join(self.in_dir, speaker))))
+            for wav_name in tqdm(wavs, desc="File", position=1):
+                basename = wav_name.split(".")[0]
+                phonemes = list(filter(lambda d: basename in d, out))[0].split("|")[2].split(" ")
+                pitch, n = self.process_utterance(speaker, basename, phonemes)
+
+                if len(pitch) > 0:
+                    pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
+
+                n_frames += n
 
             for j, accent in enumerate(accents):
                 basename = basenames[j]
@@ -170,7 +187,7 @@ class Preprocessor:
 
         return out
 
-    def process_utterance(self, speaker: str, basename: str) -> Tuple[np.ndarray, np.ndarray]:
+    def process_utterance(self, speaker: str, basename: str, phonemes: List[str]) -> Tuple[np.ndarray, np.ndarray]:
         wav = get_wav(self.config, speaker, basename)
 
         # Compute fundamental frequency
@@ -207,7 +224,13 @@ class Preprocessor:
         )
         mel_spec = torch.squeeze(mel_spec, 0).numpy().astype(np.float32)
 
-        assert pitch.size == mel_spec.shape[1], "pitch length != mel spec length"
+        assert pitch.size == mel_spec.shape[1], f"pitch length != mel spec length ({pitch.size} != {mel_spec.shape[1]})"
+
+        attn_prior = beta_binomial_prior_distribution(
+            mel_spec.shape[1],
+            len(phonemes),
+            1.0,
+        )
 
         # Save files
         wav_filename = "{}-wav-{}.npy".format(speaker, basename)
@@ -220,6 +243,12 @@ class Preprocessor:
         np.save(
             os.path.join(self.out_dir, "mel", mel_filename),
             mel_spec.T,
+        )
+
+        attn_prior_filename = "{}-attn_prior-{}.npy".format(speaker, basename)
+        np.save(
+            os.path.join(self.out_dir, "attn_prior", attn_prior_filename),
+            attn_prior,
         )
 
         return (

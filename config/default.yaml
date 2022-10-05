@@ -56,6 +56,7 @@ model:
     pos_enc_layer_type: "rel_pos"
     self_attn_layer_type: "rel_selfattn"
     activation_type: "relu"
+  aligner_temperature: 0.0005
   variance_predictor:
     filter_size: 256
     kernel_size: 3

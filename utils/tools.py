@@ -18,6 +18,7 @@ ReProcessedItemTorch = Tuple[
     LongTensor,
     np.int64,
     Tensor,
+    Tensor,
 ]
 
 ReProcessedTextItemTorch = Tuple[
@@ -41,7 +42,7 @@ def to_device(data: ReProcessedTextItem, device: TorchDevice) -> ReProcessedText
 
 
 def to_device(data: Any, device: TorchDevice):
-    if len(data) == 11:
+    if len(data) == 12:
         (
             ids,
             speakers,
@@ -53,6 +54,7 @@ def to_device(data: Any, device: TorchDevice):
             mels,
             mel_lens,
             max_mel_len,
+            attn_priors,
             pitches,
         ) = data
 
@@ -63,6 +65,7 @@ def to_device(data: Any, device: TorchDevice):
         wavs = torch.autograd.Variable(torch.from_numpy(wavs).float().to(device, non_blocking=True))
         mels = torch.autograd.Variable(torch.from_numpy(mels).float().to(device, non_blocking=True))
         mel_lens = torch.autograd.Variable(torch.from_numpy(mel_lens).long().to(device, non_blocking=True))
+        attn_priors = torch.autograd.Variable(torch.from_numpy(attn_priors).float().to(device, non_blocking=True))
         pitches = torch.autograd.Variable(torch.from_numpy(pitches).float().to(device, non_blocking=True))
 
         return (
@@ -76,6 +79,7 @@ def to_device(data: Any, device: TorchDevice):
             mels,
             mel_lens,
             max_mel_len,
+            attn_priors,
             pitches,
         )
 

@@ -7,7 +7,7 @@ from typing import TypedDict, Literal, Optional, Union
 import fregan
 import hifigan
 from fregan import VocoderConfig
-from modules.alignment import AlignmentModule, viterbi_decode, average_by_duration
+from modules.alignment import AlignmentModule, average_by_duration, binarize_attention_parallel
 from modules.tacotron2.decoder import Postnet
 from modules.conformer.encoder import Encoder as ConformerEncoder
 from modules.transformer.encoder import Encoder as TransformerEncoder, EncoderConfig
@@ -38,6 +38,7 @@ class ModelConfig(TypedDict):
     decoder: EncoderConfig
     variance_predictor: VariancePredictorConfig
     variance_embedding: VarianceEmbedding
+    aligner_temperature: float
     vocoder_type: VocoderType
     vocoder: VocoderConfig
 
@@ -151,15 +152,33 @@ class PitchAndDurationExtractor(nn.Module):
     def __init__(self, model_config: ModelConfig):
         super(PitchAndDurationExtractor, self).__init__()
         hidden = model_config["phoneme_encoder"]["hidden"]
+        temperature = model_config["aligner_temperature"]
 
-        self.alignment_module = AlignmentModule(hidden, 80)
+        self.alignment_module = AlignmentModule(hidden, 80, temperature)
 
-    def forward(self, hs: Tensor, pitches: Tensor, mels: Tensor, phoneme_lens: LongTensor, mel_lens: LongTensor):
+    def forward(
+        self,
+        hs: Tensor,
+        pitches: Tensor,
+        mels: Tensor,
+        phoneme_lens: LongTensor,
+        mel_lens: LongTensor,
+        attn_priors: Tensor,
+        speaker_embedding: Tensor,
+    ):
         h_masks = make_pad_mask(phoneme_lens).to(hs.device)
-        log_p_attn = self.alignment_module(hs, mels, h_masks)
-        durations, bin_loss = viterbi_decode(log_p_attn, phoneme_lens, mel_lens)
+        attn_soft, attn_logprob = self.alignment_module(
+            hs,
+            mels,
+            h_masks.unsqueeze(-1),
+            attn_priors.transpose(1, 2),
+            speaker_embedding,
+        )
+        attn_hard = binarize_attention_parallel(attn_soft, phoneme_lens, mel_lens)
+        durations = attn_hard.sum(2)[:, 0, :]
         avg_pitches = average_by_duration(durations, pitches.squeeze(-1), phoneme_lens, mel_lens).unsqueeze(-1)
-        return avg_pitches, durations, log_p_attn, bin_loss
+
+        return avg_pitches, durations, attn_soft, attn_hard, attn_logprob
 
 
 class FeatureEmbedder(BaseModule):
@@ -231,6 +250,7 @@ class FeatureEmbedder(BaseModule):
         max_phoneme_len: Optional[LongTensor] = None,
         mels: Optional[Tensor] = None,
         mel_lens: Optional[LongTensor] = None,
+        attn_priors: Optional[Tensor] = None,
     ):
         """Feature Embedder's forward
         Args:
@@ -248,28 +268,32 @@ class FeatureEmbedder(BaseModule):
         else:
             x_masks = self.source_mask(phoneme_lens)  # (B, Tmax, Tmax) -> torch.Size([32, 121, 121])
 
-        x = self.phoneme_embedding(phonemes)
+        phoneme_embeds = self.phoneme_embedding(phonemes)
 
-        feature_embeded, _ = self.encoder(x, x_masks)  # (B, Tmax, adim) -> torch.Size([32, 121, 256])
+        feature_embedded, _ = self.encoder(phoneme_embeds, x_masks)  # (B, Tmax, adim) -> torch.Size([32, 121, 256])
 
-        avg_pitches, durations, log_p_attn, bin_loss = None, None, None, None
+        speaker_embedding = self.speaker_embedding(speakers)
+
+        avg_pitches, durations, attn_soft, attn_hard, attn_logprob = None, None, None, None, None
         embedding_pitches = pitches
         if mels is not None:
-            avg_pitches, durations, log_p_attn, bin_loss = self.extractor(
-                hs=feature_embeded,
+            avg_pitches, durations, attn_soft, attn_hard, attn_logprob = self.extractor(
+                hs=phoneme_embeds,
                 pitches=pitches,
                 mels=mels,
                 phoneme_lens=phoneme_lens,
                 mel_lens=mel_lens,
+                attn_priors=attn_priors,
+                speaker_embedding=speaker_embedding,
             )
             embedding_pitches = avg_pitches
 
         if max_phoneme_len is None:
-            feature_embeded = feature_embeded + self.speaker_embedding(speakers).unsqueeze(1).expand(
+            feature_embedded = feature_embedded + speaker_embedding.unsqueeze(1).expand(
                 -1, phonemes.shape[1], -1
             )
         else:
-            feature_embeded = feature_embeded + self.speaker_embedding(speakers).unsqueeze(1).expand(
+            feature_embedded = feature_embedded + speaker_embedding.unsqueeze(1).expand(
                 -1, max_phoneme_len, -1
             )
 
@@ -279,8 +303,8 @@ class FeatureEmbedder(BaseModule):
             # fastpitch style
             pitch_embeds = self.pitch_embedding(embedding_pitches.transpose(1, 2)).transpose(1, 2)
 
-        feature_embeded += pitch_embeds
-        return feature_embeded, avg_pitches, durations, log_p_attn, bin_loss
+        feature_embedded += pitch_embeds
+        return feature_embedded, avg_pitches, durations, attn_soft, attn_hard, attn_logprob
 
 
 class MelSpectrogramDecoder(BaseModule):

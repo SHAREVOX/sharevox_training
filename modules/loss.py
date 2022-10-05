@@ -60,6 +60,7 @@ class FastSpeech2Loss(nn.Module):
         self.l1_criterion = nn.L1Loss()
         self.mse_criterion = nn.MSELoss()
         self.forward_sum_loss = ForwardSumLoss()
+        self.bin_loss = BinLoss()
 
     def forward(
         self,
@@ -68,7 +69,9 @@ class FastSpeech2Loss(nn.Module):
         mel_targets: Tensor,
         duration_targets: LongTensor,
         pitch_targets: Tensor,
-        log_p_attn: Tensor,
+        attn_soft: Tensor,
+        attn_hard: Tensor,
+        attn_logprob: Tensor,
         input_lens: LongTensor,
         output_lens: LongTensor,
         variance_learn: bool = True,
@@ -111,10 +114,15 @@ class FastSpeech2Loss(nn.Module):
         # calculate loss
         duration_loss = self.mse_criterion(log_duration_outputs, log_duration_targets)
         pitch_loss = self.mse_criterion(pitch_outputs, pitch_targets)
-        forward_sum_loss = self.forward_sum_loss(log_p_attn, input_lens, output_lens)
-        forward_sum_loss *= 2.0  # loss scaling
+        ctc_loss = self.forward_sum_loss(attn_logprob=attn_logprob, in_lens=input_lens, out_lens=output_lens)
+        if variance_learn:
+            bin_loss_weight = 0.
+        else:
+            bin_loss_weight = 1.
+        bin_loss = self.bin_loss(hard_attention=attn_hard, soft_attention=attn_soft) * bin_loss_weight
+        align_loss = ctc_loss + bin_loss
 
-        total_loss = forward_sum_loss
+        total_loss = align_loss
         if variance_learn:
             total_loss += duration_loss + pitch_loss
 
@@ -128,108 +136,48 @@ class FastSpeech2Loss(nn.Module):
             mel_loss = self.l1_criterion(outputs, mel_targets)
             postnet_mel_loss = self.l1_criterion(postnet_outputs, mel_targets)
 
-            total_loss += mel_loss + postnet_mel_loss
+            total_loss = total_loss + mel_loss + postnet_mel_loss
 
-        return total_loss, duration_loss, pitch_loss, forward_sum_loss, mel_loss, postnet_mel_loss
+        return total_loss, duration_loss, pitch_loss, align_loss, mel_loss, postnet_mel_loss
 
 
-class ForwardSumLoss(torch.nn.Module):
-    """Forwardsum loss described at https://openreview.net/forum?id=0NQwnnwAORi"""
-
-    def __init__(self, cache_prior: bool = True):
-        """Initialize forwardsum loss module.
-        Args:
-            cache_prior (bool): Whether to cache beta-binomial prior
-        """
+class ForwardSumLoss(nn.Module):
+    def __init__(self, blank_logprob: float = -1.0):
         super().__init__()
-        self.cache_prior = cache_prior
-        self._cache = {}
+        self.log_softmax = nn.LogSoftmax(dim=3)
+        self.ctc_loss = nn.CTCLoss(zero_infinity=True)
+        self.blank_logprob = blank_logprob
 
-    def forward(
-        self,
-        log_p_attn: torch.Tensor,
-        input_lens: torch.Tensor,
-        output_lens: torch.Tensor,
-        blank_prob: float = np.e ** -1,
-    ) -> torch.Tensor:
-        """Calculate forward propagation.
-        Args:
-            log_p_attn (Tensor): Batch of log probability of attention matrix
-                (B, T_feats, T_text).
-            input_lens (Tensor): Batch of the lengths of each input (B,).
-            output_lens (Tensor): Batch of the lengths of each target (B,).
-            blank_prob (float): Blank symbol probability.
-        Returns:
-            Tensor: forwardsum loss value.
-        """
-        B = log_p_attn.size(0)
+    def forward(self, attn_logprob: Tensor, in_lens: Tensor, out_lens: Tensor):
+        key_lens = in_lens
+        query_lens = out_lens
+        attn_logprob_padded = F.pad(input=attn_logprob, pad=(1, 0), value=self.blank_logprob)
 
-        # add beta-binomial prior
-        bb_prior = self._generate_prior(input_lens, output_lens)
-        bb_prior = bb_prior.to(dtype=log_p_attn.dtype, device=log_p_attn.device)
-        log_p_attn = log_p_attn + bb_prior
+        total_loss = 0.0
+        for bid in range(attn_logprob.shape[0]):
+            target_seq = torch.arange(1, key_lens[bid] + 1).unsqueeze(0)
+            curr_logprob = attn_logprob_padded[bid].permute(1, 0, 2)[: query_lens[bid], :, : key_lens[bid] + 1]
 
-        # a row must be added to the attention matrix to account for
-        #    blank token of CTC loss
-        # (B,T_feats,T_text+1)
-        log_p_attn_pd = F.pad(log_p_attn, (1, 0, 0, 0, 0, 0), value=np.log(blank_prob))
-
-        loss = 0
-        for bidx in range(B):
-            # construct target sequnece.
-            # Every text token is mapped to a unique sequnece number.
-            target_seq = torch.arange(1, input_lens[bidx] + 1).unsqueeze(0)
-            cur_log_p_attn_pd = log_p_attn_pd[
-                                bidx, : output_lens[bidx], : input_lens[bidx] + 1
-                                ].unsqueeze(
-                1
-            )  # (T_feats,1,T_text+1)
-            loss += F.ctc_loss(
-                log_probs=cur_log_p_attn_pd,
-                targets=target_seq,
-                input_lengths=output_lens[bidx: bidx + 1],
-                target_lengths=input_lens[bidx: bidx + 1],
-                zero_infinity=True,
+            curr_logprob = self.log_softmax(curr_logprob[None])[0]
+            loss = self.ctc_loss(
+                curr_logprob,
+                target_seq,
+                input_lengths=query_lens[bid : bid + 1],
+                target_lengths=key_lens[bid : bid + 1],
             )
-        loss = loss / B
-        return loss
+            total_loss += loss
 
-    def _generate_prior(self, phoneme_lens, mel_lens, w=1) -> torch.Tensor:
-        """Generate alignment prior formulated as beta-binomial distribution
-        Args:
-            phoneme_lens (Tensor): Batch of the lengths of each input (B,).
-            mel_lens (Tensor): Batch of the lengths of each target (B,).
-            w (float): Scaling factor; lower -> wider the width.
-        Returns:
-            Tensor: Batched 2d static prior matrix (B, T_feats, T_text).
-        """
-        B = len(phoneme_lens)
-        T_text = phoneme_lens.max()
-        T_feats = mel_lens.max()
+        total_loss /= attn_logprob.shape[0]
+        return total_loss
 
-        bb_prior = torch.full((B, T_feats, T_text), fill_value=-np.inf)
-        for bidx in range(B):
-            T = mel_lens[bidx].item()
-            N = phoneme_lens[bidx].item()
 
-            key = str(T) + "," + str(N)
-            if self.cache_prior and key in self._cache:
-                prob = self._cache[key]
-            else:
-                alpha = w * np.arange(1, T + 1, dtype=float)  # (T,)
-                beta = w * np.array([T - t + 1 for t in alpha])
-                k = np.arange(N)
-                batched_k = k[..., None]  # (N,1)
-                prob = betabinom.logpmf(batched_k, N, alpha, beta)  # (N,T)
+class BinLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
 
-            # store cache
-            if self.cache_prior and key not in self._cache:
-                self._cache[key] = prob
-
-            prob = torch.from_numpy(prob).transpose(0, 1)  # -> (T,N)
-            bb_prior[bidx, :T, :N] = prob
-
-        return bb_prior
+    def forward(self, hard_attention: Tensor, soft_attention: Tensor):
+        log_sum = torch.log(torch.clamp(soft_attention[hard_attention == 1], min=1e-12)).sum()
+        return -log_sum / hard_attention.sum()
 
 
 class GeneratorLoss(nn.Module):
