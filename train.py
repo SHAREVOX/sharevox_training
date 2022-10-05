@@ -536,18 +536,6 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                                 fig=fig,
                                 tag="Training/step_{}_{}_postnet".format(step, tag),
                             )
-                        fig_attn = plot_one_alignment(
-                            attn_priors=attn_priors,
-                            attn_soft=attn_soft,
-                            attn_hard=attn_hard,
-                            phoneme_lens=phoneme_lens,
-                            mel_lens=mel_lens,
-                        )
-                        log(
-                            train_logger,
-                            fig=fig_attn,
-                            tag="Training/step_{}_{}_attn".format(step, tag),
-                        )
                         fig, tag = plot_one_sample(
                             ids=ids,
                             duration_targets=durations,
@@ -562,6 +550,19 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                             fig=fig,
                             tag="Training/step_{}_{}_fromwav".format(step, tag),
                         )
+                        fig_attn = plot_one_alignment(
+                            attn_priors=attn_priors,
+                            attn_soft=attn_soft,
+                            attn_hard=attn_hard,
+                            phoneme_lens=phoneme_lens,
+                            mel_lens=mel_lens,
+                        )
+                        log(
+                            train_logger,
+                            fig=fig_attn,
+                            tag="Training/step_{}_{}_attn".format(step, tag),
+                        )
+
                         sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
                         log(
                             train_logger,
