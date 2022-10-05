@@ -15,7 +15,6 @@ class TrainConfigPath(TypedDict):
     ckpt_path: str
     log_path: str
     result_path: str
-    tf_data_path: str
 
 
 class TrainConfigOptimizer(TypedDict):
