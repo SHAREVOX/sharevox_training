@@ -521,20 +521,21 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                                 fmax=preprocess_config["mel"]["mel_fmax"]
                             ).transpose(1, 2)
 
-                        fig, tag = plot_one_sample(
-                            ids=ids,
-                            duration_targets=durations,
-                            pitch_targets=avg_pitches,
-                            mel_targets=mels,
-                            mel_predictions=postnet_outputs,
-                            phoneme_lens=phoneme_lens,
-                            mel_lens=mel_lens,
-                        )
-                        log(
-                            train_logger,
-                            fig=fig,
-                            tag="Training/step_{}_{}_postnet".format(step, tag),
-                        )
+                        if postnet_outputs is not None:
+                            fig, tag = plot_one_sample(
+                                ids=ids,
+                                duration_targets=durations,
+                                pitch_targets=avg_pitches,
+                                mel_targets=mels,
+                                mel_predictions=postnet_outputs,
+                                phoneme_lens=phoneme_lens,
+                                mel_lens=mel_lens,
+                            )
+                            log(
+                                train_logger,
+                                fig=fig,
+                                tag="Training/step_{}_{}_postnet".format(step, tag),
+                            )
                         fig_attn = plot_one_alignment(
                             attn_priors=attn_priors,
                             attn_soft=attn_soft,
