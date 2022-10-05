@@ -189,7 +189,7 @@ def evaluate(
                 log(
                     logger,
                     fig=fig_attn,
-                    tag="Validation/{}_attn".format(step, tag),
+                    tag="Validation/{}_attn".format(tag),
                     step=step,
                 )
 
