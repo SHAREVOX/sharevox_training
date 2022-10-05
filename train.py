@@ -507,7 +507,9 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     if step % synth_step == 0:
                         torch.cuda.empty_cache()
                         with torch.no_grad():
-                            wav_outputs = generator_model(postnet_outputs[0].unsqueeze(0).transpose(1, 2))
+                            wav_outputs = generator_model(
+                                (postnet_outputs if postnet_outputs is not None else outputs)[0].unsqueeze(0).transpose(1, 2)
+                            )
                             mel_from_wavs = mel_spectrogram(
                                 y=wav_outputs.squeeze(1),
                                 n_fft=preprocess_config["stft"]["filter_length"],
