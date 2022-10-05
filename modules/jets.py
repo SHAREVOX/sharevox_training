@@ -41,6 +41,7 @@ class ModelConfig(TypedDict):
     aligner_temperature: float
     vocoder_type: VocoderType
     vocoder: VocoderConfig
+    mode: Literal["jets", "mel"]
 
 
 class BaseModule(nn.Module):
@@ -321,9 +322,11 @@ class MelSpectrogramDecoder(BaseModule):
         else:
             raise ValueError("unknown decoder: " + decoder_type)
 
-        self.mel_channels = mel_channels
-        self.mel_linear = nn.Linear(hidden, self.mel_channels)
-        self.postnet = Postnet()
+        self.is_mel_mode = model_config["mode"] == "mel"
+        if self.is_mel_mode:
+            self.mel_channels = mel_channels
+            self.mel_linear = nn.Linear(hidden, self.mel_channels)
+            self.postnet = Postnet()
 
     def forward(
         self,
@@ -345,12 +348,15 @@ class MelSpectrogramDecoder(BaseModule):
             h_masks = None
 
         outputs, _ = self.decoder(length_regulated_tensor, h_masks)
-        outputs = self.mel_linear(outputs).view(
-            outputs.size(0), -1, self.mel_channels
-        )  # (B, T_feats, odim)
 
-        postnet_outputs = outputs + self.postnet(
-            outputs.transpose(1, 2)
-        ).transpose(1, 2)
+        postnet_outputs = None
+        if self.is_mel_mode:
+            outputs = self.mel_linear(outputs).view(
+                outputs.size(0), -1, self.mel_channels
+            )  # (B, T_feats, odim)
+
+            postnet_outputs = outputs + self.postnet(
+                outputs.transpose(1, 2)
+            ).transpose(1, 2)
 
         return outputs, postnet_outputs

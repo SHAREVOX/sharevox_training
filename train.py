@@ -114,7 +114,9 @@ def evaluate(
                     length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
-                wav_outputs = generator_model(postnet_outputs.transpose(1, 2))
+                wav_outputs = generator_model(
+                    (postnet_outputs if postnet_outputs is not None else outputs).transpose(1, 2)
+                )
                 mel_from_outputs = mel_spectrogram(
                     y=wav_outputs.squeeze(1),
                     n_fft=preprocess_config["stft"]["filter_length"],
@@ -142,8 +144,12 @@ def evaluate(
                     output_lens=mel_lens,
                 )
 
-                gen_mel_loss = F.l1_loss(mels, mel_from_outputs[:,:mels.size(1),:]) * 45
+                _mel_loss = F.l1_loss(mels, mel_from_outputs[:,:mels.size(1),:])
+                gen_mel_loss = _mel_loss * 45
                 total_loss = total_loss + gen_mel_loss
+
+                if mel_loss is None:
+                    mel_loss = _mel_loss
 
                 loss_dict: LossDict = {
                     "total_loss": total_loss,
@@ -211,8 +217,8 @@ def evaluate(
     message1 = "Validation Step {}, ".format(step)
     message2 = (
         "Total Loss: {total_loss:.4f}, "
-        "Mel Loss: {mel_loss:.4f}, "
-        "Mel PostNet Loss: {postnet_mel_loss:.4f}, "
+        "Mel Loss: {mel_loss:.4f}, " +
+        ("Mel PostNet Loss: {postnet_mel_loss:.4f}, " if postnet_mel_loss is not None else "") +
         "Duration Loss: {duration_loss:.4f}, "
         "Pitch Loss: {pitch_loss:.4f}, "
         "Alignment Loss: {alignment_loss:.4f}, "
@@ -369,7 +375,9 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 )
 
                 segmented_outputs, start_idxs = get_random_segments(
-                    postnet_outputs.transpose(1, 2), mel_lens, segment_size // hop_length
+                    (postnet_outputs if postnet_outputs is not None else outputs).transpose(1, 2),
+                    mel_lens,
+                    segment_size // hop_length
                 )
 
                 segumented_wavs = get_segments(wavs.unsqueeze(1), start_idxs * hop_length, segment_size)
@@ -423,7 +431,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 if step > disc_learn_start:
                     _, y_df_hat_g, fmap_f_r, fmap_f_g = mpd_model(segumented_wavs, wav_outputs)
                     _, y_ds_hat_g, fmap_s_r, fmap_s_g = msd_model(segumented_wavs, wav_outputs)
-                    loss_gen_all, _, _, _, _, _ = generator_loss(
+                    loss_gen_all, _, _, _, _, _mel_loss = generator_loss(
                         mels=segumented_mels,
                         mel_from_outputs=mel_from_outputs,
                         y_df_hat_g=y_df_hat_g,
@@ -434,7 +442,11 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         fmap_s_g=fmap_s_g,
                     )
                 else:
-                    loss_gen_all = F.l1_loss(segumented_mels, mel_from_outputs) * 45  # loss scaling
+                    _mel_loss = F.l1_loss(segumented_mels, mel_from_outputs)
+                    loss_gen_all = _mel_loss * 45  # loss scaling
+
+                if mel_loss is None:
+                    mel_loss = _mel_loss
 
                 total_loss = total_loss + loss_gen_all
 
@@ -446,7 +458,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     "pitch_loss": pitch_loss,
                     "alignment_loss": align_loss,
                     "generator_loss": loss_gen_all,
-                    "discriminator_loss": loss_disc_all if loss_disc_all is not None else 0.0,
+                    "discriminator_loss": loss_disc_all,
                 }
 
                 # Backward
@@ -460,13 +472,13 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         message1 = "Step {}/{}, ".format(step, total_step)
                         message2 = (
                             "Total Loss: {total_loss:.4f}, "
-                            "Mel Loss: {mel_loss:.4f}, "
-                            "Mel PostNet Loss: {postnet_mel_loss:.4f}, "
+                            "Mel Loss: {mel_loss:.4f}, " +
+                            ("Mel PostNet Loss: {postnet_mel_loss:.4f}, " if postnet_mel_loss is not None else "") +
                             "Duration Loss: {duration_loss:.4f}, "
                             "Pitch Loss: {pitch_loss:.4f}, "
                             "Alignment Loss: {alignment_loss:.4f}, "
-                            "Generator Loss {generator_loss:.4f}, "
-                            "Discriminator Loss {discriminator_loss:.4f}"
+                            "Generator Loss {generator_loss:.4f}, " +
+                            ("Discriminator Loss: {discriminator_loss:.4f}, " if loss_disc_all is not None else "")
                         ).format(
                             **loss_dict
                         )

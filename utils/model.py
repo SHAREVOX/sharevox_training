@@ -74,7 +74,11 @@ def get_model(
     embedder_model = FeatureEmbedder(config["model"], speaker_num, pitch_min, pitch_max).to(device)
     decoder_model = MelSpectrogramDecoder(config["model"], config["preprocess"]["mel"]["n_mel_channels"]).to(device)
     vocoder_type = config["model"]["vocoder_type"]
-    hidden_size = config["preprocess"]["mel"]["n_mel_channels"]
+    train_mode = config["model"]["mode"]
+    if train_mode == "jets":
+        hidden_size = config["model"]["decoder"]["hidden"]
+    else:
+        hidden_size = config["preprocess"]["mel"]["n_mel_channels"]
 
     if vocoder_type == "fregan":
         import fregan

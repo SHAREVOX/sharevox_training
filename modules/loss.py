@@ -126,7 +126,7 @@ class FastSpeech2Loss(nn.Module):
 
         # for jets (future)
         mel_loss, postnet_mel_loss = None, None
-        if outputs is not None and postnet_outputs is not None:
+        if outputs is not None or postnet_outputs is not None:
             output_masks = make_non_pad_mask(output_lens).unsqueeze(-1).to(mel_targets.device)
             outputs = outputs.masked_select(output_masks)
             postnet_outputs = postnet_outputs.masked_select(output_masks)
