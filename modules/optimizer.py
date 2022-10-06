@@ -69,7 +69,7 @@ class ScheduledOptim:
 
     def step_and_update_lr_disc(self) -> None:
         self._discriminator_optimizer.step()
-        self._update_learning_rate_gen()
+        self._update_learning_rate_disc()
 
     def zero_grad_gen(self) -> None:
         self._variance_optimizer.zero_grad()
