@@ -3,6 +3,7 @@ import random
 import json
 import argparse
 
+import librosa
 import torch
 import yaml
 from scipy.interpolate import interp1d
@@ -10,7 +11,6 @@ from scipy.stats import betabinom
 
 from text import accent_to_id
 
-from scipy.io.wavfile import read as load_wav
 from sklearn.preprocessing import StandardScaler
 from librosa.util import normalize
 import numpy as np
@@ -31,6 +31,7 @@ class PreProcessPath(TypedDict):
 class PreProcessAudio(TypedDict):
     sampling_rate: int
     max_wav_value: float
+    trim_top_db: int
 
 
 class PreProcessSTFT(TypedDict):
@@ -53,18 +54,33 @@ class PreProcessConfig(TypedDict):
     mel: PreProcessMel
 
 
+def load_wav(full_path: str, filter_length: int, hop_length: int, trim_top_db: int) -> Tuple[int, np.ndarray]:
+    # not resampling in librosa
+    data, sampling_rate = librosa.load(full_path, None)
+    _, index = librosa.effects.trim(data, top_db=trim_top_db, frame_length=filter_length, hop_length=hop_length)
+    pau_duration = sampling_rate // 20  # 0.05s
+    start = index[0] - pau_duration
+    end = index[1] + pau_duration
+    if start < 0:
+        start = 0
+    if end > len(data) - 1:
+        end = -1
+    data = data[start:end]
+    return sampling_rate, data
+
+
 def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> np.ndarray:
     in_dir = config["path"]["data_path"]
-    max_wav_value = config["audio"]["max_wav_value"]
     sampling_rate = config["audio"]["sampling_rate"]
+    trim_top_db = config["audio"]["trim_top_db"]
+    filter_length = config["stft"]["filter_length"]
+    hop_length = config["stft"]["hop_length"]
 
     wav_path = os.path.join(in_dir, speaker, "{}.wav".format(basename))
 
     # Read and trim wav files
-    data: Tuple[int, np.ndarray] = load_wav(wav_path)
-    sr, wav = data
+    sr, wav = load_wav(wav_path, filter_length, hop_length, trim_top_db)
     assert sampling_rate == sr, f"sampling rate is invalid (required: {sampling_rate}, actually: {sr}, file: {wav_path})"
-    wav = wav / max_wav_value
     wav = normalize(wav) * 0.95
     wav = wav.astype(np.float32)
 
