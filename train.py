@@ -139,12 +139,12 @@ def evaluate(
                     output_lens=mel_lens,
                 )
                 bin_loss *= 2.0
-                align_loss += bin_loss
+                align_loss = align_loss + bin_loss
 
                 gen_mel_loss = F.l1_loss(mels, mel_from_outputs) * 45
 
                 # total loss
-                total_loss += bin_loss
+                total_loss = total_loss + bin_loss
 
                 loss_dict: LossDict = {
                     "total_loss": total_loss,
@@ -434,7 +434,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     loss_gen_all = F.l1_loss(segumented_mels, mel_from_outputs) * 45  # loss scaling
 
                 bin_loss *= 2.0  # loss scaling
-                align_loss += bin_loss
+                align_loss = align_loss + bin_loss
 
                 if variance_learn_start < step:
                     total_loss = total_loss + bin_loss + loss_gen_all

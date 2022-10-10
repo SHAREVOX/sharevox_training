@@ -116,7 +116,7 @@ class FastSpeech2Loss(nn.Module):
 
         total_loss = forward_sum_loss
         if variance_learn:
-            total_loss += duration_loss + pitch_loss
+            total_loss = total_loss + duration_loss + pitch_loss
 
         # for jets (future)
         mel_loss, postnet_mel_loss = None, None
@@ -128,7 +128,7 @@ class FastSpeech2Loss(nn.Module):
             mel_loss = self.l1_criterion(outputs, mel_targets)
             postnet_mel_loss = self.l1_criterion(postnet_outputs, mel_targets)
 
-            total_loss = mel_loss + postnet_mel_loss
+            total_loss = total_loss + mel_loss + postnet_mel_loss
 
         return total_loss, duration_loss, pitch_loss, forward_sum_loss, mel_loss, postnet_mel_loss
 
