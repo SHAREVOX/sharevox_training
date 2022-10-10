@@ -216,14 +216,14 @@ class Preprocessor:
         if np.sum(pitch != 0) <= 1:
             raise RuntimeError()
 
-        nonzero_ids = np.where(pitch != 0)[0]
-        interp_fn = interp1d(
-            nonzero_ids,
-            pitch[nonzero_ids],
-            fill_value=(pitch[nonzero_ids[0]], pitch[nonzero_ids[-1]]),
-            bounds_error=False,
-        )
-        pitch: np.ndarray = interp_fn(np.arange(0, len(pitch)))
+        # nonzero_ids = np.where(pitch != 0)[0]
+        # interp_fn = interp1d(
+        #     nonzero_ids,
+        #     pitch[nonzero_ids],
+        #     fill_value=(pitch[nonzero_ids[0]], pitch[nonzero_ids[-1]]),
+        #     bounds_error=False,
+        # )
+        # pitch: np.ndarray = interp_fn(np.arange(0, len(pitch)))
         pitch = pitch[:duration]
 
         # Compute mel-scale spectrogram
