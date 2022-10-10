@@ -62,7 +62,7 @@ def mel_spectrogram(
     if wnsize_dtype_device not in hann_window:
         hann_window[wnsize_dtype_device] = torch.hann_window(win_size).to(dtype=y.dtype, device=y.device)
 
-    pad_size = int(n_fft / 2)
+    pad_size = int((n_fft - hop_size) / 2)
     y = F.pad(y.unsqueeze(1), (pad_size, pad_size), mode='reflect')
     y = y.squeeze(1)
 
