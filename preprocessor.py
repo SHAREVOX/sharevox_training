@@ -54,7 +54,7 @@ class PreProcessConfig(TypedDict):
     mel: PreProcessMel
 
 
-def load_wav(full_path: str, filter_length: int, hop_length: int, trim_top_db: int) -> Tuple[int, np.ndarray]:
+def load_wav(full_path: str, filter_length: int, hop_length: int, trim_top_db: int) -> Tuple[int, np.ndarray, int]:
     # not resampling in librosa
     data, sampling_rate = librosa.load(full_path, None)
     _, index = librosa.effects.trim(data, top_db=trim_top_db, frame_length=filter_length, hop_length=hop_length)
@@ -66,10 +66,10 @@ def load_wav(full_path: str, filter_length: int, hop_length: int, trim_top_db: i
     if end > len(data) - 1:
         end = -1
     data = data[start:end]
-    return sampling_rate, data
+    return sampling_rate, data, (end - start) // hop_length
 
 
-def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> np.ndarray:
+def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> Tuple[np.ndarray, int]:
     in_dir = config["path"]["data_path"]
     sampling_rate = config["audio"]["sampling_rate"]
     trim_top_db = config["audio"]["trim_top_db"]
@@ -79,12 +79,12 @@ def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> np.ndarray
     wav_path = os.path.join(in_dir, speaker, "{}.wav".format(basename))
 
     # Read and trim wav files
-    sr, wav = load_wav(wav_path, filter_length, hop_length, trim_top_db)
+    sr, wav, duration = load_wav(wav_path, filter_length, hop_length, trim_top_db)
     assert sampling_rate == sr, f"sampling rate is invalid (required: {sampling_rate}, actually: {sr}, file: {wav_path})"
     wav = normalize(wav) * 0.95
     wav = wav.astype(np.float32)
 
-    return wav
+    return wav, duration
 
 
 def beta_binomial_prior_distribution(mel_count, phoneme_count, scaling_factor=1.0):
@@ -203,7 +203,7 @@ class Preprocessor:
         return out
 
     def process_utterance(self, speaker: str, basename: str, phonemes: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        wav = get_wav(self.config, speaker, basename)
+        wav, duration = get_wav(self.config, speaker, basename)
 
         # Compute fundamental frequency
         pitch, t = pw.dio(
@@ -224,6 +224,7 @@ class Preprocessor:
             bounds_error=False,
         )
         pitch: np.ndarray = interp_fn(np.arange(0, len(pitch)))
+        pitch = pitch[:duration]
 
         # Compute mel-scale spectrogram
         wav_torch = torch.FloatTensor(wav).unsqueeze(0)
