@@ -56,7 +56,7 @@ class PreProcessConfig(TypedDict):
 
 def load_wav(full_path: str, filter_length: int, hop_length: int, trim_top_db: int) -> Tuple[int, np.ndarray, int]:
     # not resampling in librosa
-    data, sampling_rate = librosa.load(full_path, None)
+    data, sampling_rate = librosa.load(full_path, sr=None)
     _, index = librosa.effects.trim(data, top_db=trim_top_db, frame_length=filter_length, hop_length=hop_length)
     pau_duration = sampling_rate // 20  # 0.05s
     start = index[0] - pau_duration
