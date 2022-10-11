@@ -12,3 +12,5 @@ pyyaml
 pyworld
 pyopenjtalk
 onnxruntime
+tensorboard
+matplotlib
