@@ -58,13 +58,13 @@ def load_wav(full_path: str, filter_length: int, hop_length: int, trim_top_db: i
     # not resampling in librosa
     data, sampling_rate = librosa.load(full_path, sr=None)
     _, index = librosa.effects.trim(data, top_db=trim_top_db, frame_length=filter_length, hop_length=hop_length)
-    pau_duration = sampling_rate // 20  # 0.05s
+    pau_duration = sampling_rate // 5  # 0.2s
     start = index[0] - pau_duration
     end = index[1] + pau_duration
     if start < 0:
         start = 0
     if end > len(data) - 1:
-        end = -1
+        end = len(data) - 1
     data = data[start:end]
     return sampling_rate, data, (end - start) // hop_length
 
