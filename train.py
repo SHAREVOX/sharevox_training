@@ -25,10 +25,7 @@ torch.backends.cudnn.benchmark = True
 
 
 def evaluate(
-    variance_model: nn.Module,  # PitchAndDurationPredictor
-    embedder_model: nn.Module,  # FeatureEmbedder
-    decoder_model: nn.Module,  # MelSpectrogramDecoder
-    length_regulator: nn.Module,
+    fs2_model: nn.Module,  # FastSpeech2
     step: int,
     config: Config,
     logger: SummaryWriter,
@@ -76,32 +73,23 @@ def evaluate(
                 pitches,
             ) = batch
             with torch.no_grad():
-                pitch_outputs, log_duration_outputs = variance_model(
+                (
+                    pitch_outputs,
+                    log_duration_outputs,
+                    avg_pitches,
+                    durations,
+                    log_p_attn,
+                    bin_loss,
+                    outputs,
+                    postnet_outputs
+                ) = fs2_model(
                     phonemes=phonemes,
                     accents=accents,
-                    speakers=speakers,
-                    phoneme_lens=phoneme_lens,
-                    max_phoneme_len=max_phoneme_len,
-                )
-                feature_embedded, avg_pitches, durations, log_p_attn, bin_loss = embedder_model(
-                    phonemes=phonemes,
                     pitches=pitches,
                     speakers=speakers,
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                     mels=mels,
-                    mel_lens=mel_lens,
-                )
-                h_masks = make_non_pad_mask(mel_lens).to(feature_embedded.device)
-                d_masks = make_non_pad_mask(phoneme_lens).to(durations.device)
-                length_regulated_tensor = length_regulator(
-                    hs=feature_embedded,
-                    ds=durations,
-                    h_masks=h_masks,
-                    d_masks=d_masks,
-                )
-                outputs, postnet_outputs = decoder_model(
-                    length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
 
@@ -232,14 +220,11 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
     )
 
     # Prepare model
-    variance_model, embedder_model, decoder_model, optimizer, epoch = get_model(restore_step, config, device, speaker_num, train=True)
-    length_regulator = GaussianUpsampling().to(device)
+    fs2_model, optimizer, epoch = get_model(restore_step, config, device, speaker_num, train=True)
     if num_gpus > 1:
-        variance_model = DistributedDataParallel(variance_model, device_ids=[rank]).to(device)
-        embedder_model = DistributedDataParallel(embedder_model, device_ids=[rank]).to(device)
-        decoder_model = DistributedDataParallel(decoder_model, device_ids=[rank]).to(device)
+        fs2_model = DistributedDataParallel(fs2_model, device_ids=[rank]).to(device)
 
-    num_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model)
+    num_param = get_param_num(fs2_model)
     Loss = FastSpeech2Loss().to(device)
     if rank == 0:
         print("Number of FastSpeech2 Parameters:", num_param)
@@ -296,32 +281,23 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                 ) = batch
 
                 # Forward
-                pitch_outputs, log_duration_outputs = variance_model(
+                (
+                    pitch_outputs,
+                    log_duration_outputs,
+                    avg_pitches,
+                    durations,
+                    log_p_attn,
+                    bin_loss,
+                    outputs,
+                    postnet_outputs
+                ) = fs2_model(
                     phonemes=phonemes,
                     accents=accents,
-                    speakers=speakers,
-                    phoneme_lens=phoneme_lens,
-                    max_phoneme_len=max_phoneme_len,
-                )
-                feature_embedded, avg_pitches, durations, log_p_attn, bin_loss = embedder_model(
-                    phonemes=phonemes,
                     pitches=pitches,
                     speakers=speakers,
                     phoneme_lens=phoneme_lens,
                     max_phoneme_len=max_phoneme_len,
                     mels=mels,
-                    mel_lens=mel_lens,
-                )
-                h_masks = make_non_pad_mask(mel_lens).to(feature_embedded.device)
-                d_masks = make_non_pad_mask(phoneme_lens).to(durations.device)
-                length_regulated_tensor = length_regulator(
-                    hs=feature_embedded,
-                    ds=durations,
-                    h_masks=h_masks,
-                    d_masks=d_masks,
-                )
-                outputs, postnet_outputs = decoder_model(
-                    length_regulated_tensor=length_regulated_tensor,
                     mel_lens=mel_lens,
                 )
 
@@ -340,7 +316,7 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                     variance_learn=variance_learn_start < step
                 )
                 # align loss
-                bin_loss *= 2.0  # loss scaling
+                bin_loss = bin_loss * 2.0  # loss scaling
                 align_loss += bin_loss
 
                 total_loss = total_loss + bin_loss
@@ -414,31 +390,21 @@ def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: in
                         )
 
                     if step % val_step == 0:
-                        variance_model.eval()
-                        embedder_model.eval()
-                        decoder_model.eval()
+                        fs2_model.eval()
                         message = evaluate(
-                            variance_model, embedder_model, decoder_model, length_regulator, step, config, val_logger, vocoder
+                            fs2_model, step, config, val_logger, vocoder
                         )
                         with open(os.path.join(val_log_path, "log.txt"), "a") as f:
                             f.write(message + "\n")
                         outer_bar.write(message)
 
-                        variance_model.train()
-                        embedder_model.train()
-                        decoder_model.train()
+                        fs2_model.train()
 
                     if step % save_step == 0:
                         torch.save(
                             {
-                                "variance_model": (variance_model.module if num_gpus > 1 else variance_model).state_dict(),
-                                "embedder_model": (embedder_model.module if num_gpus > 1 else embedder_model).state_dict(),
-                                "decoder_model": (decoder_model.module if num_gpus > 1 else decoder_model).state_dict(),
-                                "optimizer": {
-                                    "variance": optimizer._variance_optimizer.state_dict(),
-                                    "embedder": optimizer._embedder_optimizer.state_dict(),
-                                    "decoder": optimizer._decoder_optimizer.state_dict(),
-                                },
+                                "model": (fs2_model.module if num_gpus > 1 else fs2_model).state_dict(),
+                                "optimizer": optimizer._optimizer.state_dict(),
                                 "epoch": epoch - 1,
                             },
                             os.path.join(

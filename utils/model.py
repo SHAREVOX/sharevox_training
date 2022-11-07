@@ -6,8 +6,7 @@ import torch
 from torch import nn, device as TorchDevice
 
 from dataset import TrainConfig
-from modules.fastspeech2 import PitchAndDurationPredictor, MelSpectrogramDecoder, \
-    ModelConfig, FeatureEmbedder, VocoderType, VocoderGenerator
+from modules.fastspeech2 import FastSpeech2, ModelConfig, VocoderType, VocoderGenerator
 from modules.optimizer import ScheduledOptim
 from preprocessor import PreProcessConfig
 
@@ -25,7 +24,7 @@ def get_model(
     device: torch.device,
     speaker_num: int,
     train: True,
-) -> Tuple[PitchAndDurationPredictor, FeatureEmbedder, MelSpectrogramDecoder, ScheduledOptim, int]:
+) -> Tuple[FastSpeech2, ScheduledOptim, int]:
     pass
 
 
@@ -36,7 +35,7 @@ def get_model(
     device: torch.device,
     speaker_num: int,
     train: False,
-) -> Tuple[PitchAndDurationPredictor, FeatureEmbedder, MelSpectrogramDecoder, None, int]:
+) -> Tuple[FastSpeech2, None, int]:
     pass
 
 
@@ -52,9 +51,7 @@ def get_model(
         stats_text = f.read()
     stats_json = json.loads(stats_text)
     pitch_min, pitch_max = stats_json["pitch"][:2]
-    variance_model = PitchAndDurationPredictor(config["model"], speaker_num).to(device)
-    embedder_model = FeatureEmbedder(config["model"], speaker_num, pitch_min, pitch_max).to(device)
-    decoder_model = MelSpectrogramDecoder(config["model"]).to(device)
+    fs2_model = FastSpeech2(config["model"], speaker_num, pitch_min, pitch_max).to(device)
 
     epoch = -1
     if restore_step:
@@ -63,29 +60,21 @@ def get_model(
             "{}.pth.tar".format(restore_step),
         )
         ckpt = torch.load(ckpt_path, map_location=device)
-        variance_model.load_state_dict(ckpt["variance_model"])
-        embedder_model.load_state_dict(ckpt["embedder_model"])
-        decoder_model.load_state_dict(ckpt["decoder_model"])
+        fs2_model.load_state_dict(ckpt["model"])
         epoch = ckpt["epoch"]
 
     if train:
         scheduled_optim = ScheduledOptim(
-            variance_model, embedder_model, decoder_model, config["train"], config["model"], epoch
+            fs2_model, config["train"], config["model"], epoch
         )
         if restore_step:
             scheduled_optim.load_state_dict(ckpt["optimizer"])
-        variance_model.train()
-        embedder_model.train()
-        decoder_model.train()
-        return variance_model, embedder_model, decoder_model, scheduled_optim, epoch
+        fs2_model.train()
+        return fs2_model, scheduled_optim, epoch
 
-    variance_model.eval()
-    embedder_model.eval()
-    decoder_model.eval()
-    variance_model.requires_grad_ = False
-    embedder_model.requires_grad_ = False
-    decoder_model.requires_grad_ = False
-    return variance_model, embedder_model, decoder_model, None, epoch
+    fs2_model.eval()
+    fs2_model.requires_grad_ = False
+    return fs2_model, None, epoch
 
 
 def get_param_num(model: nn.Module) -> int:

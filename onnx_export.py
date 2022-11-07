@@ -10,7 +10,7 @@ import yaml
 from torch import nn, Tensor, LongTensor
 
 from fregan import Generator
-from modules.fastspeech2 import MelSpectrogramDecoder, PitchAndDurationPredictor, FeatureEmbedder, VocoderGenerator
+from modules.fastspeech2 import FastSpeech2, VocoderGenerator
 from text import phoneme_to_id, accent_to_id
 from utils.model import Config, get_model, get_vocoder
 
@@ -23,12 +23,18 @@ device = torch.device("cpu")
 
 
 class Variance(nn.Module):
-    def __init__(self, config: Config, variance_model: PitchAndDurationPredictor, pitch_mean: float, pitch_std: float):
+    def __init__(self, config: Config, model: FastSpeech2, pitch_mean: float, pitch_std: float):
         super(Variance, self).__init__()
 
         self.sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
         self.hop_length = config["preprocess"]["stft"]["hop_length"]
-        self.variance_model = variance_model
+        self.phoneme_embedding = model.phoneme_embedding
+        self.accent_embedding = model.accent_embedding
+        self.speaker_embedding = model.speaker_embedding
+        self.__forward_preprocessing = model.__forward_preprocessing
+        self.variance_encoder = model.variance_encoder
+        self.duration_predictor = model.duration_predictor
+        self.pitch_predictor = model.pitch_predictor
         self.pitch_mean = pitch_mean
         self.pitch_std = pitch_std
 
@@ -38,19 +44,35 @@ class Variance(nn.Module):
         accents: Tensor,
         speakers: Tensor,
     ):
-        pitches, log_durations = self.variance_model(phonemes, accents, speakers)
+        x_masks = torch.ones_like(phonemes).squeeze(0)
+
+        phoneme_embedding = self.phoneme_embedding(phonemes)
+        accent_embedding = self.accent_embedding(accents)
+
+        pitches_args = self.__forward_preprocessing(phonemes, speakers, phoneme_embedding + accent_embedding, x_masks)
+        pitches: Tensor = self.pitch_predictor(pitches_args[0], pitches_args[1].unsqueeze(-1))
+
+        log_durations_args = self.__forward_preprocessing(phonemes, speakers, phoneme_embedding, x_masks)
+        log_durations: Tensor = self.duration_predictor(log_durations_args[0], log_durations_args[1].unsqueeze(-1))
+
         pitches = torch.log(pitches * self.pitch_std + self.pitch_mean)
         durations = torch.clamp((torch.exp(log_durations) - 1) / (self.sampling_rate / self.hop_length), min=0.01)
         return pitches, durations
 
 
 class Embedder(nn.Module):
-    def __init__(self, config: Config, embedder_model: FeatureEmbedder, pitch_mean: float, pitch_std: float):
+    def __init__(self, config: Config, model: FastSpeech2, pitch_mean: float, pitch_std: float):
         super(Embedder, self).__init__()
 
         self.sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
         self.hop_length = config["preprocess"]["stft"]["hop_length"]
-        self.embedder_model = embedder_model
+        self.decoder_phoneme_embedding = model.decoder_phoneme_embedding
+        self.decoder_speaker_embedding = model.decoder_speaker_embedding
+        self.phoneme_encoder = model.phoneme_encoder
+        self.pitch_embedding_type = model.pitch_embedding_type
+        self.pitch_bins = model.pitch_bins
+        self.pitch_embedding = model.pitch_embedding
+        self.bucketize = model.bucketize
         self.pitch_mean = pitch_mean
         self.pitch_std = pitch_std
 
@@ -61,21 +83,46 @@ class Embedder(nn.Module):
         speakers: Tensor,
     ):
         pitches = (torch.exp(pitches) - self.pitch_mean) / self.pitch_std
-        feature_embedded, _, _, _, _ = self.embedder_model(phonemes, pitches.unsqueeze(-1), speakers)
+        x = self.decoder_phoneme_embedding(phonemes)
+        x_masks = torch.ones_like(phonemes).squeeze(0)
+
+        feature_embedded, _ = self.phoneme_encoder(x, x_masks)  # (B, Tmax, adim) -> torch.Size([32, 121, 256])
+        feature_embedded = feature_embedded + self.decoder_speaker_embedding(speakers).unsqueeze(1).expand(
+            -1, phonemes.shape[1], -1
+        )
+
+        if self.pitch_embedding_type == "normal":
+            pitch_embeds = self.pitch_embedding(self.bucketize(pitches, self.pitch_bins))
+        else:
+            # fastpitch style
+            pitch_embeds = self.pitch_embedding(pitches.transpose(1, 2)).transpose(1, 2)
+
+        feature_embedded = feature_embedded + pitch_embeds
+
         return feature_embedded
 
 
 class Decoder(nn.Module):
-    def __init__(self, config: Config, decoder: MelSpectrogramDecoder, vocoder: VocoderGenerator):
+    def __init__(self, config: Config, model: FastSpeech2, vocoder: VocoderGenerator):
         super(Decoder, self).__init__()
 
         self.max_wav_value = config["preprocess"]["audio"]["max_wav_value"]
-        self.decoder = decoder
-        self.vocoder_type = config["model"]["vocoder_type"]
+        self.decoder = model.decoder
+        self.mel_linear = model.mel_linear
+        self.postnet = model.postnet
+        # self.vocoder_type = config["model"]["vocoder_type"]
         self.vocoder = vocoder
 
     def forward(self, length_regulated_tensor: Tensor) -> Tensor:
-        _, postnet_outputs = self.decoder(length_regulated_tensor)
+        outputs, _ = self.decoder(length_regulated_tensor, None)
+        outputs = self.mel_linear(outputs).view(
+            outputs.size(0), -1, self.mel_channels
+        )
+
+        postnet_outputs = outputs + self.postnet(
+            outputs.transpose(1, 2)
+        ).transpose(1, 2)
+
         wavs = self.vocoder(postnet_outputs[0].transpose(0, 1).unsqueeze(0)).squeeze(1)
         return wavs
 
