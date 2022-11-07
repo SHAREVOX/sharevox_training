@@ -1,4 +1,7 @@
-from typing import overload, List, Tuple, Any, Literal
+import os
+import glob
+from pathlib import Path
+from typing import overload, List, Tuple, Any, Literal, Optional
 
 import numpy as np
 import torch
@@ -111,3 +114,17 @@ def get_activation(act: ActivationType) -> nn.Module:
     }
 
     return activation_funcs[act]()
+
+
+def save_checkpoint(tqdm_bar, obj: dict, filepath: Path):
+    tqdm_bar.write("Saving checkpoint to {}".format(filepath))
+    torch.save(obj, filepath)
+    tqdm_bar.write("Complete.")
+
+
+def scan_checkpoint(cp_dir: Path) -> Optional[str]:
+    pattern = os.path.join(cp_dir, '????????.pth.tar')
+    cp_list = glob.glob(pattern)
+    if len(cp_list) == 0:
+        return None
+    return sorted(cp_list)[-1]

@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Tuple, TypedDict, overload
+from typing import Tuple, TypedDict, overload, Optional
 
 import torch
 from torch import nn
@@ -34,6 +34,7 @@ def get_model(
     VocoderMultiScaleDiscriminator,
     ScheduledOptim,
     int,
+    int,
 ]:
     pass
 
@@ -54,12 +55,13 @@ def get_model(
     None,
     None,
     int,
+    int,
 ]:
     pass
 
 
 def get_model(
-    restore_step: int,
+    checkpoint_path: Optional[str],
     config: Config,
     device: torch.device,
     speaker_num: int,
@@ -97,12 +99,9 @@ def get_model(
     msd_model.to(device)
 
     epoch = -1
-    if restore_step:
-        ckpt_path = os.path.join(
-            config["train"]["path"]["ckpt_path"],
-            "{}.pth.tar".format(restore_step),
-        )
-        ckpt = torch.load(ckpt_path, map_location=device)
+    step = 0
+    if checkpoint_path is not None:
+        ckpt = torch.load(checkpoint_path, map_location=device)
         variance_model.load_state_dict(ckpt["variance_model"])
         embedder_model.load_state_dict(ckpt["embedder_model"])
         decoder_model.load_state_dict(ckpt["decoder_model"])
@@ -110,12 +109,13 @@ def get_model(
         mpd_model.load_state_dict(ckpt["mpd_model"])
         msd_model.load_state_dict(ckpt["msd_model"])
         epoch = ckpt["epoch"]
+        step = ckpt["step"]
 
     if train:
         scheduled_optim = ScheduledOptim(
             variance_model, embedder_model, decoder_model, generator_model, mpd_model, msd_model, config["train"], epoch
         )
-        if restore_step:
+        if checkpoint_path is not None:
             scheduled_optim.load_state_dict(ckpt["optimizer"])
         variance_model.train()
         embedder_model.train()
@@ -123,7 +123,7 @@ def get_model(
         generator_model.train()
         mpd_model.train()
         msd_model.train()
-        return variance_model, embedder_model, decoder_model, generator_model, mpd_model, msd_model, scheduled_optim, epoch
+        return variance_model, embedder_model, decoder_model, generator_model, mpd_model, msd_model, scheduled_optim, epoch, step
 
     variance_model.eval()
     embedder_model.eval()
@@ -134,7 +134,7 @@ def get_model(
     embedder_model.requires_grad_ = False
     decoder_model.requires_grad_ = False
     generator_model.requires_grad_ = False
-    return variance_model, embedder_model, decoder_model, None, None, None, epoch
+    return variance_model, embedder_model, decoder_model, None, None, None, epoch, step
 
 
 def get_param_num(model: nn.Module) -> int:
