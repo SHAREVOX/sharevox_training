@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 from torch import Tensor, LongTensor
 
 import fregan
-from modules.fastspeech2 import VocoderGenerator
+from models.fastspeech2 import VocoderGenerator
 from utils.model import Config
 from utils.plot import plot_mel
 

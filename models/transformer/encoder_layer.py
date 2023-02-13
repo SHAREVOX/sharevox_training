@@ -11,10 +11,10 @@ import torch
 from torch import nn, Tensor
 from typing import Optional, Tuple, Union
 
-from modules.transformer.attention import MultiHeadedAttention
-from modules.transformer.layer_norm import LayerNorm
-from modules.transformer.multi_layer_conv import Conv1dLinear, MultiLayeredConv1d
-from modules.transformer.positionwise_feed_forward import PositionwiseFeedForward
+from models.transformer.attention import MultiHeadedAttention
+from models.transformer.layer_norm import LayerNorm
+from models.transformer.multi_layer_conv import Conv1dLinear, MultiLayeredConv1d
+from models.transformer.positionwise_feed_forward import PositionwiseFeedForward
 
 
 class EncoderLayer(nn.Module):

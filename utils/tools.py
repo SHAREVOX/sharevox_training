@@ -92,7 +92,7 @@ ActivationType = Literal["hardtanh", "tanh", "relu", "selu", "swish"]
 def get_activation(act: ActivationType) -> nn.Module:
     """Return activation function."""
     # Lazy load to avoid unused import
-    from modules.conformer.swish import Swish
+    from models.conformer.swish import Swish
 
     activation_funcs = {
         "hardtanh": nn.Hardtanh,

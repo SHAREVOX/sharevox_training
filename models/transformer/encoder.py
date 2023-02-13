@@ -6,13 +6,13 @@ from typing import Union, Tuple, Type, Optional, List, TypedDict, Literal
 
 from torch import nn, Tensor
 
-from modules.transformer.attention import MultiHeadedAttention
-from modules.transformer.embedding import PositionalEncoding
-from modules.transformer.encoder_layer import EncoderLayer
-from modules.transformer.layer_norm import LayerNorm
-from modules.transformer.multi_layer_conv import Conv1dLinear
-from modules.transformer.multi_layer_conv import MultiLayeredConv1d
-from modules.transformer.positionwise_feed_forward import PositionwiseFeedForward
+from models.transformer.attention import MultiHeadedAttention
+from models.transformer.embedding import PositionalEncoding
+from models.transformer.encoder_layer import EncoderLayer
+from models.transformer.layer_norm import LayerNorm
+from models.transformer.multi_layer_conv import Conv1dLinear
+from models.transformer.multi_layer_conv import MultiLayeredConv1d
+from models.transformer.positionwise_feed_forward import PositionwiseFeedForward
 from utils.tools import ActivationType
 
 LayerTypeLiteral = Literal["linear", "conv1d", "conv1d-linear"]

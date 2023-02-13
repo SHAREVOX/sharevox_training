@@ -7,15 +7,15 @@ from typing import Optional
 
 from torch import nn, Tensor
 
-from modules.conformer.convolution import ConvolutionModule
-from modules.conformer.encoder_layer import EncoderLayer
-from modules.transformer.attention import MultiHeadedAttention, RelPositionMultiHeadedAttention
-from modules.transformer.embedding import PositionalEncoding, RelPositionalEncoding
-from modules.transformer.encoder import EncoderConfig
-from modules.transformer.layer_norm import LayerNorm
-from modules.transformer.multi_layer_conv import Conv1dLinear
-from modules.transformer.multi_layer_conv import MultiLayeredConv1d
-from modules.transformer.positionwise_feed_forward import PositionwiseFeedForward
+from models.conformer.convolution import ConvolutionModule
+from models.conformer.encoder_layer import EncoderLayer
+from models.transformer.attention import MultiHeadedAttention, RelPositionMultiHeadedAttention
+from models.transformer.embedding import PositionalEncoding, RelPositionalEncoding
+from models.transformer.encoder import EncoderConfig
+from models.transformer.layer_norm import LayerNorm
+from models.transformer.multi_layer_conv import Conv1dLinear
+from models.transformer.multi_layer_conv import MultiLayeredConv1d
+from models.transformer.positionwise_feed_forward import PositionwiseFeedForward
 from utils.tools import get_activation
 
 

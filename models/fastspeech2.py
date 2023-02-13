@@ -6,11 +6,11 @@ from typing import TypedDict, Literal, Optional, Union
 
 import fregan
 import hifigan
-from modules.alignment import AlignmentModule, viterbi_decode, average_by_duration
-from modules.tacotron2.decoder import Postnet
-from modules.conformer.encoder import Encoder as ConformerEncoder
-from modules.transformer.encoder import Encoder as TransformerEncoder, EncoderConfig
-from modules.variance_predictor import VariancePredictor, VariancePredictorConfig
+from models.alignment import AlignmentModule, viterbi_decode, average_by_duration
+from models.tacotron2.decoder import Postnet
+from models.conformer.encoder import Encoder as ConformerEncoder
+from models.transformer.encoder import Encoder as TransformerEncoder, EncoderConfig
+from models.variance_predictor import VariancePredictor, VariancePredictorConfig
 from text import phoneme_symbols, accent_symbols
 from utils.mask import make_non_pad_mask, make_pad_mask
 

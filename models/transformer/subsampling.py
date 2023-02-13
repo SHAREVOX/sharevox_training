@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 
 from torch import nn, Tensor
 
-from modules.transformer.embedding import PositionalEncoding
+from models.transformer.embedding import PositionalEncoding
 
 
 class Conv2dSubsampling(nn.Module):

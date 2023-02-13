@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 from dataset import TrainConfig
-from modules.fastspeech2 import PitchAndDurationPredictor, PitchAndDurationExtractor, MelSpectrogramDecoder, ModelConfig, FeatureEmbedder
+from models.fastspeech2 import PitchAndDurationPredictor, PitchAndDurationExtractor, MelSpectrogramDecoder, ModelConfig, FeatureEmbedder
 
 
 class ScheduledOptim:

@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dataset import Dataset
-from modules.length_regulator import LengthRegulator
+from models.length_regulator import LengthRegulator
 from preprocessor import get_tgt_and_wav
 from utils.model import Config, get_model
 from utils.tools import to_device, ReProcessedItemTorch
