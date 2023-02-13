@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-# Copyright 2019 Tomoki Hayashi
-#  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
-
-"""Length regulator related modules."""
-
 import torch
 
 from torch import nn, Tensor, LongTensor
@@ -49,6 +41,7 @@ class LengthRegulator(nn.Module):
             Tensor: replicated input tensor based on durations (B, T*, D).
 
         """
+        ds = ds.long()
         if alpha != 1.0:
             assert alpha > 0
             ds = torch.round(ds.float() * alpha).long()

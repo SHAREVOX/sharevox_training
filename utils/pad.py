@@ -62,4 +62,3 @@ def pad_2D(inputs: Union[np.ndarray, List[np.ndarray]], maxlen: Optional[int] = 
         output = np.stack([pad(x, max_len) for x in inputs])
 
     return output
-

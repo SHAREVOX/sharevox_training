@@ -19,6 +19,8 @@ LayerTypeLiteral = Literal["linear", "conv1d", "conv1d-linear"]
 PosEncLayerTypeLiteral = Literal["abs_pos", "rel_pos"]
 SelfAttnLayerTypeLiteral = Literal["selfattn", "rel_selfattn"]
 
+EncoderConfigType = Literal["transformer", "conformer"]
+
 
 class EncoderConfig(TypedDict):
     hidden: int

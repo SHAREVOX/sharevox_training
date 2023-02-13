@@ -1,7 +1,6 @@
 from torch import nn, Tensor
 
 from typing import TypedDict, Optional
-from torchtyping import TensorType
 
 from models.transformer.layer_norm import LayerNorm
 
@@ -15,8 +14,9 @@ class VariancePredictorConfig(TypedDict):
 class VariancePredictor(nn.Module):
     def __init__(
         self,
-        input_size: int,
         config: VariancePredictorConfig,
+        in_channels: int,
+        gin_channels: int = 0,
     ):
         super(VariancePredictor, self).__init__()
         self.conv = nn.ModuleList()
@@ -24,8 +24,11 @@ class VariancePredictor(nn.Module):
         self.kernel_size = config["kernel_size"]
         self.dropout = config["dropout"]
 
+        if gin_channels != 0:
+            self.cond = nn.Conv1d(gin_channels, in_channels, 1)
+
         for idx in range(2):
-            in_channels = input_size if idx == 0 else self.filter_size
+            in_channels = in_channels if idx == 0 else self.filter_size
             self.conv += [
                 nn.Sequential(
                     nn.Conv1d(
@@ -42,7 +45,7 @@ class VariancePredictor(nn.Module):
             ]
         self.linear = nn.Linear(self.filter_size, 1)
 
-    def forward(self, xs: Tensor, x_masks: Optional[Tensor] = None) -> Tensor:
+    def forward(self, xs: Tensor, x_masks: Optional[Tensor] = None, g: Optional[Tensor] = None) -> Tensor:
         """Calculate forward propagation.
         Args:
             xs (Tensor): Batch of input sequences (B, Tmax, idim).
@@ -50,11 +53,17 @@ class VariancePredictor(nn.Module):
         Returns:
             Tensor: Batch of predicted durations in log domain (B, Tmax).
         """
+
         xs = xs.transpose(1, -1)  # (B, idim, Tmax)
+
+        if g is not None:
+            g = g.detach()
+            xs = xs + self.cond(g)
+
         for f in self.conv:
             xs = f(xs)  # (B, C, Tmax)
 
-        xs = self.linear(xs.transpose(1, 2))  # (B, Tmax, 1)
+        xs = self.linear(xs.transpose(1, 2)).transpose(1, 2)
 
         if x_masks is not None:
             xs = xs.masked_fill(x_masks, 0.0)

@@ -3,9 +3,11 @@
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn, Tensor, LongTensor
 import torch.nn.functional as F
 from numba import jit
+
+from utils.mask import make_pad_mask
 
 
 class AlignmentModule(nn.Module):
@@ -163,3 +165,16 @@ def average_by_duration(ds, xs, text_lengths, feats_lengths):
     xs_avg = _average_by_duration(*args)
     xs_avg = torch.from_numpy(xs_avg).to(device)
     return xs_avg
+
+
+class PitchAndDurationExtractor(nn.Module):
+    def __init__(self, hidden_size: int, feat_size: int = 80):
+        super(PitchAndDurationExtractor, self).__init__()
+        self.alignment_module = AlignmentModule(hidden_size, feat_size)
+
+    def forward(self, hs: Tensor, pitches: Tensor, mels: Tensor, phoneme_lens: LongTensor, mel_lens: LongTensor):
+        h_masks = make_pad_mask(phoneme_lens).to(hs.device)
+        log_p_attn = self.alignment_module(hs, mels, h_masks)
+        durations, bin_loss = viterbi_decode(log_p_attn, phoneme_lens, mel_lens)
+        avg_pitches = average_by_duration(durations, pitches.squeeze(1), phoneme_lens, mel_lens).unsqueeze(1)
+        return avg_pitches, durations, log_p_attn, bin_loss

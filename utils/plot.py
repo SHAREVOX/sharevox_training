@@ -1,39 +1,88 @@
-from typing import List, Tuple
+from typing import Optional
 
-from matplotlib import pyplot as plt, use as matplotlib_use
 import numpy as np
+import matplotlib.pylab as plt
 
-# https://python-climbing.com/runtimeerror_main_thread_is_not_in_main_loop/
-matplotlib_use('Agg')
+MATPLOTLIB_FLAG = False
 
-def plot_mel(
-    data: List[Tuple[np.ndarray, np.ndarray]], titles: List[str]
-) -> plt.Figure:
-    plot_data: Tuple[plt.Figure, plt.Axes] = plt.subplots(len(data), 1, squeeze=False)
-    fig, axes = plot_data
-    if titles is None:
-        titles = [None for i in range(len(data))]
 
-    def add_axis(fig: plt.Figure, old_ax: plt.Axes) -> plt.Axes:
-        ax = fig.add_axes(old_ax.get_position(), anchor="W")
-        ax.set_facecolor("None")
-        return ax
+def plot_spectrogram_to_numpy(spectrogram: np.ndarray) -> np.ndarray:
+    global MATPLOTLIB_FLAG
+    if not MATPLOTLIB_FLAG:
+        import matplotlib
 
-    for i in range(len(data)):
-        mel, pitch = data[i]
-        axes[i][0].imshow(mel, origin="lower")
-        axes[i][0].set_aspect(2.5, adjustable="box")
-        axes[i][0].set_ylim(0, mel.shape[0])
-        axes[i][0].set_title(titles[i], fontsize="medium")
-        axes[i][0].tick_params(labelsize="x-small", left=False, labelleft=False)
-        axes[i][0].set_anchor("W")
+        matplotlib.use("Agg")
+        MATPLOTLIB_FLAG = True
 
-        ax1 = add_axis(fig, axes[i][0])
-        ax1.plot(pitch, color="tomato")
-        ax1.set_xlim(0, mel.shape[1])
-        ax1.set_ylabel("F0", color="tomato")
-        ax1.tick_params(
-            labelsize="x-small", colors="tomato", bottom=False, labelbottom=False
-        )
+    fig, ax = plt.subplots(figsize=(10, 2))
+    im = ax.imshow(spectrogram, aspect="auto", origin="lower", interpolation="none")
+    plt.colorbar(im, ax=ax)
+    plt.xlabel("Frames")
+    plt.ylabel("Channels")
+    plt.tight_layout()
 
-    return fig
+    fig.canvas.draw()
+    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
+    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    plt.close()
+    return data
+
+
+def plot_alignment_to_numpy(alignment: np.ndarray, info: Optional[str] = None) -> np.ndarray:
+    global MATPLOTLIB_FLAG
+    if not MATPLOTLIB_FLAG:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        MATPLOTLIB_FLAG = True
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    im = ax.imshow(
+        alignment.transpose(), aspect="auto", origin="lower", interpolation="none"
+    )
+    fig.colorbar(im, ax=ax)
+    xlabel = "Decoder timestep"
+    if info is not None:
+        xlabel += "\n\n" + info
+    plt.xlabel(xlabel)
+    plt.ylabel("Encoder timestep")
+    plt.tight_layout()
+
+    fig.canvas.draw()
+    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
+    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    plt.close()
+    return data
+
+
+def plot_f0_to_numpy(
+    f0_gt: np.ndarray,
+    f0_avg_regulated: Optional[np.ndarray] = None,
+    f0_pred_regulated: Optional[np.ndarray] = None,
+    f0_pred: Optional[np.ndarray] = None
+):
+    global MATPLOTLIB_FLAG
+    if not MATPLOTLIB_FLAG:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        MATPLOTLIB_FLAG = True
+
+    fig = plt.figure()
+    plt.plot(f0_gt, color="r", label="gt")
+    if f0_avg_regulated is not None:
+        plt.plot(f0_avg_regulated, color="b", label="gt_avg")
+    if f0_pred_regulated is not None:
+        plt.plot(f0_pred_regulated, color="orange", label="pred_avg")
+    if f0_pred is not None:
+        plt.plot(f0_pred, color="green", label="pred")
+    plt.ylim(0, 800)
+    plt.legend()
+
+    fig.canvas.draw()
+    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
+    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    plt.close()
+    return data
+
+

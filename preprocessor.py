@@ -3,20 +3,22 @@ import random
 import json
 import argparse
 
+import librosa
+import resampy
 import torch
 import yaml
 from scipy.interpolate import interp1d
+from scipy.stats import betabinom
 
-from text import accent_to_id
+from text import _accent_to_id as accent_to_id
 
-from scipy.io.wavfile import read as load_wav
 from sklearn.preprocessing import StandardScaler
 from librosa.util import normalize
 import numpy as np
 import pyworld as pw
 from tqdm import tqdm
 
-from stft import mel_spectrogram
+from utils.mel_processing import spectrogram_torch as spectrogram
 
 from typing import Tuple, List, TypedDict
 
@@ -30,7 +32,7 @@ class PreProcessPath(TypedDict):
 class PreProcessAudio(TypedDict):
     sampling_rate: int
     max_wav_value: float
-
+    trim_top_db: int
 
 class PreProcessSTFT(TypedDict):
     filter_length: int
@@ -40,8 +42,10 @@ class PreProcessSTFT(TypedDict):
 
 class PreProcessMel(TypedDict):
     n_mel_channels: int
+    n_mel_channels_loss: int
     mel_fmin: int
     mel_fmax: int
+    mel_fmax_loss: int
 
 
 class PreProcessConfig(TypedDict):
@@ -52,22 +56,41 @@ class PreProcessConfig(TypedDict):
     mel: PreProcessMel
 
 
-def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> np.ndarray:
+def load_wav(full_path: str, sr: int, filter_length: int, hop_length: int, trim_top_db: int) -> Tuple[np.ndarray, int]:
+    # not resampling in librosa
+    data, sampling_rate = librosa.load(full_path, sr=None)
+    # resampling by outside of librosa and showing warning
+    if sampling_rate != sr:
+        tqdm.write(f"sampling rate is different(required: {sampling_rate}, actually: {sr}, file: {full_path}), auto converted by script.")
+        data = resampy.resample(data, sampling_rate, sr, filter="kaiser_best")
+
+    _, index = librosa.effects.trim(data, top_db=trim_top_db, frame_length=filter_length, hop_length=hop_length)
+    pau_duration = sampling_rate // 5  # 0.2s
+    start = index[0] - pau_duration
+    end = index[1] + pau_duration
+    if start < 0:
+        start = 0
+    if end > len(data) - 1:
+        end = len(data) - 1
+    data = data[start:end]
+    return data, (end - start) // hop_length
+
+
+def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> Tuple[np.ndarray, int]:
     in_dir = config["path"]["data_path"]
-    max_wav_value = config["audio"]["max_wav_value"]
     sampling_rate = config["audio"]["sampling_rate"]
+    trim_top_db = config["audio"]["trim_top_db"]
+    filter_length = config["stft"]["filter_length"]
+    hop_length = config["stft"]["hop_length"]
 
     wav_path = os.path.join(in_dir, speaker, "{}.wav".format(basename))
 
     # Read and trim wav files
-    data: Tuple[int, np.ndarray] = load_wav(wav_path)
-    sr, wav = data
-    assert sampling_rate == sr, f"sampling rate is invalid (required: {sampling_rate}, actually: {sr}, file: {wav_path})"
-    wav = wav / max_wav_value
+    wav, duration = load_wav(wav_path, sampling_rate, filter_length, hop_length, trim_top_db)
     wav = normalize(wav) * 0.95
     wav = wav.astype(np.float32)
 
-    return wav
+    return wav, duration
 
 
 class Preprocessor:
@@ -82,7 +105,8 @@ class Preprocessor:
         self.hop_length = config["stft"]["hop_length"]
 
     def build_from_path(self) -> List[str]:
-        os.makedirs((os.path.join(self.out_dir, "mel")), exist_ok=True)
+        os.makedirs((os.path.join(self.out_dir, "wav")), exist_ok=True)
+        os.makedirs((os.path.join(self.out_dir, "spec")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "pitch")), exist_ok=True)
         os.makedirs((os.path.join(self.out_dir, "accent")), exist_ok=True)
 
@@ -96,30 +120,36 @@ class Preprocessor:
         dirs = list(filter(lambda x: os.path.isdir(os.path.join(self.in_dir, x)), os.listdir(self.in_dir)))
         for i, speaker in enumerate(tqdm(dirs, desc="Dir", position=0)):
             speakers[speaker] = i
-            wavs = list(filter(lambda p: ".wav" in p, os.listdir(os.path.join(self.in_dir, speaker))))
-            for wav_name in tqdm(wavs, desc="File", position=1):
-                basename = wav_name.split(".")[0]
-                pitch, n = self.process_utterance(speaker, basename)
-
-                if len(pitch) > 0:
-                    pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
-
-                n_frames += n
 
             # phoneme
             phoneme_path = os.path.join(self.text_dir, speaker, "phoneme.csv")
+            if not os.path.isfile(phoneme_path):
+                phoneme_path = os.path.join(self.text_dir, "phoneme.csv")
             with open(phoneme_path) as f:
-                phonemes = f.read().split("\n")
+                phonemes = filter(lambda x: bool(x), f.read().split("\n"))
                 # 前後の無音区間のポーズをつけ足す
                 out += ["|".join([text.split(",")[0], speaker, "pau " + text.split(",")[1] + " pau"]) for text in phonemes]
 
             # accent
             accent_path = os.path.join(self.text_dir, speaker, "accent.csv")
+            if not os.path.isfile(accent_path):
+                accent_path = os.path.join(self.text_dir, "accent.csv")
             with open(accent_path) as f:
-                accents = f.read().split("\n")
+                accents = list(filter(lambda x: bool(x), f.read().split("\n")))
                 basenames = [text.split(",")[0] for text in accents]
                 # 前後の無音区間のアクセント区切りをつけ足す
                 accents = ["# " + text.split(",")[1] + " #" for text in accents]
+
+            wavs = list(filter(lambda p: ".wav" in p, os.listdir(os.path.join(self.in_dir, speaker))))
+            for wav_name in tqdm(wavs, desc="File", position=1):
+                basename = wav_name.split(".")[0]
+                phonemes = list(filter(lambda d: basename in d, out))[0].split("|")[2].split(" ")
+                pitch, n = self.process_utterance(speaker, basename, phonemes)
+
+                if len(pitch) > 0:
+                    pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
+
+                n_frames += n
 
             for j, accent in enumerate(accents):
                 basename = basenames[j]
@@ -161,7 +191,7 @@ class Preprocessor:
 
         # Write metadata
         with open(os.path.join(self.out_dir, "train.txt"), "w", encoding="utf-8") as f:
-            for m in out[self.val_size :]:
+            for m in out:
                 f.write(m + "\n")
         with open(os.path.join(self.out_dir, "val.txt"), "w", encoding="utf-8") as f:
             for m in out[: self.val_size]:
@@ -169,8 +199,8 @@ class Preprocessor:
 
         return out
 
-    def process_utterance(self, speaker: str, basename: str) -> Tuple[np.ndarray, np.ndarray]:
-        wav = get_wav(self.config, speaker, basename)
+    def process_utterance(self, speaker: str, basename: str, phonemes: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+        wav, duration = get_wav(self.config, speaker, basename)
 
         # Compute fundamental frequency
         pitch, t = pw.dio(
@@ -183,44 +213,44 @@ class Preprocessor:
         if np.sum(pitch != 0) <= 1:
             raise RuntimeError()
 
-        nonzero_ids = np.where(pitch != 0)[0]
-        interp_fn = interp1d(
-            nonzero_ids,
-            pitch[nonzero_ids],
-            fill_value=(pitch[nonzero_ids[0]], pitch[nonzero_ids[-1]]),
-            bounds_error=False,
-        )
-        pitch: np.ndarray = interp_fn(np.arange(0, len(pitch)))
+        # nonzero_ids = np.where(pitch != 0)[0]
+        # interp_fn = interp1d(
+        #     nonzero_ids,
+        #     pitch[nonzero_ids],
+        #     fill_value=(pitch[nonzero_ids[0]], pitch[nonzero_ids[-1]]),
+        #     bounds_error=False,
+        # )
+        # pitch: np.ndarray = interp_fn(np.arange(0, len(pitch)))
+        pitch = pitch[:duration]
 
         # Compute mel-scale spectrogram
         wav_torch = torch.FloatTensor(wav).unsqueeze(0)
-        mel_spec = mel_spectrogram(
+        spec = spectrogram(
             y=wav_torch,
             n_fft=self.config["stft"]["filter_length"],
-            num_mels=self.config["mel"]["n_mel_channels"],
-            sampling_rate=self.config["audio"]["sampling_rate"],
             hop_size=self.config["stft"]["hop_length"],
             win_size=self.config["stft"]["win_length"],
-            fmin=self.config["mel"]["mel_fmin"],
-            fmax=self.config["mel"]["mel_fmax"]
         )
-        mel_spec = torch.squeeze(mel_spec, 0).numpy().astype(np.float32)
+        spec = torch.squeeze(spec, 0).numpy().astype(np.float32)
 
-        assert pitch.size == mel_spec.shape[1], "pitch length != mel spec length"
+        assert pitch.size == spec.shape[1], f"pitch length != spec length ({pitch.size} != {spec.shape[1]})"
 
         # Save files
+        wav_filename = "{}-wav-{}.npy".format(speaker, basename)
+        np.save(os.path.join(self.out_dir, "wav", wav_filename), wav)
+
         pitch_filename = "{}-pitch-{}.npy".format(speaker, basename)
         np.save(os.path.join(self.out_dir, "pitch", pitch_filename), pitch)
 
-        mel_filename = "{}-mel-{}.npy".format(speaker, basename)
+        spec_filename = "{}-spec-{}.npy".format(speaker, basename)
         np.save(
-            os.path.join(self.out_dir, "mel", mel_filename),
-            mel_spec.T,
+            os.path.join(self.out_dir, "spec", spec_filename),
+            spec.T,
         )
 
         return (
             self.remove_outlier(pitch),
-            mel_spec.shape[1],
+            spec.shape[1],
         )
 
     def remove_outlier(self, values: np.ndarray) -> np.ndarray:

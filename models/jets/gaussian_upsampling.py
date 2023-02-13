@@ -2,33 +2,36 @@
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
 import logging
+from typing import Optional
 
 import torch
+from torch import nn, LongTensor, Tensor
 
 
-class GaussianUpsampling(torch.nn.Module):
+class GaussianUpsampling(nn.Module):
     """Gaussian upsampling with fixed temperature as in:
-
     https://arxiv.org/abs/2010.04301
-
     """
 
-    def __init__(self, delta=0.1):
+    def __init__(self, delta: float =0.1):
         super().__init__()
         self.delta = delta
 
-    def forward(self, hs, ds, h_masks=None, d_masks=None):
+    def forward(
+        self,
+        hs: Tensor,
+        ds: LongTensor,
+        h_masks: Optional[Tensor] = None,
+        d_masks: Optional[Tensor] = None
+    ) -> Tensor:
         """Upsample hidden states according to durations.
-
         Args:
             hs (Tensor): Batched hidden state to be expanded (B, T_text, adim).
             ds (Tensor): Batched token duration (B, T_text).
             h_masks (Tensor): Mask tensor (B, T_feats).
             d_masks (Tensor): Mask tensor (B, T_text).
-
         Returns:
             Tensor: Expanded hidden state (B, T_feat, adim).
-
         """
         B = ds.size(0)
         device = ds.device

@@ -3,20 +3,24 @@ preprocess:
     data_path: "../jsut_ver1.1/basic5000"
     text_data_path: "../jsut_ver1.1/basic5000"
     preprocessed_path: "./preprocessed_data/JSUT"
-  val_size: 100
+  val_size: 16
   audio:
     sampling_rate: 48000
     max_wav_value: 32768.0
+    trim_top_db: 20
   stft:
-    filter_length: 1024
-    hop_length: 256
-    win_length: 1024
+    filter_length: 2048
+    hop_length: 512
+    win_length: 2048
   mel:
     n_mel_channels: 80
+    n_mel_channels_loss: 80
     mel_fmin: 0
     mel_fmax: 8000
+    mel_fmax_loss: null
 
 model:
+  model_type: "vits"
   variance_encoder_type: "transformer"
   variance_encoder:
     hidden: 48
@@ -30,8 +34,22 @@ model:
     pos_enc_layer_type: "abs_pos"
     self_attn_layer_type: "selfattn"
     activation_type: "relu"
-  phoneme_encoder_type: "transformer"
-  phoneme_encoder:
+  posterior_encoder:
+    hidden: 192
+    kernel_size: 5
+    layers: 16
+    stacks: 1
+    base_dilation: 1
+    dropout: 0.0
+  flow:
+    flows: 4
+    hidden: 192
+    kernel_size: 5
+    layers: 2
+    base_dilation: 1
+    dropout: 0.1
+  prior_encoder_type: "transformer"
+  prior_encoder:
     hidden: 192
     heads: 2
     layers: 1
@@ -43,8 +61,8 @@ model:
     pos_enc_layer_type: "abs_pos"
     self_attn_layer_type: "selfattn"
     activation_type: "relu"
-  decoder_type: "conformer"
-  decoder:
+  frame_prior_network_type: "conformer"
+  frame_prior_network:
     hidden: 192
     heads: 2
     layers: 4
@@ -56,32 +74,57 @@ model:
     pos_enc_layer_type: "rel_pos"
     self_attn_layer_type: "rel_selfattn"
     activation_type: "relu"
-  variance_predictor:
+  duration_predictor:
     filter_size: 256
-    kernel_size: 3
-    dropout: 0.5
-  variance_embedding:
-    kernel_size: 3
-    dropout: 0.1
-    pitch_embedding_type: "fastpitch"
-    # n_bins: 256
-  vocoder_type: "hifigan"
+    kernel_size: 5
+    dropout: 0.3
+  pitch_predictor:
+    filter_size: 256
+    kernel_size: 5
+    dropout: 0.3
+  pitch_embedding:
+    hidden: 128
+    kernel_size: 13
+    dropout: 0.3
+  pitch_upsampler:
+    filter_size: 256
+    kernel_size: 5
+    dropout: 0.3
+  upsampler_type: "sfregan2m"
+  upsampler:
+    resblock: "1"
+    share_upsamples: False
+    share_downsamples: False
+    upsample_rates: [ 8, 8, 2 ]
+    dense_factors: [ 0.5, 1, 2 ]
+    upsample_kernel_sizes: [ 16, 16, 4 ]
+    upsample_initial_channel: 256
+    source_resblock_dilation_sizes: [ [ 1 ], [ 1, 2 ], [ 1, 2, 4 ] ]
+    filter_resblock_kernel_sizes: [ 3, 7, 11 ]
+    filter_resblock_dilation_sizes: [ [ 1, 3, 5 ], [ 1, 3, 5 ], [ 1, 3, 5 ] ]
+    segment_size: 16384
+  global_hidden: 192
 
 train:
-  path:
-    ckpt_path: "./output/ckpt/JSUT"
-    log_path: "./output/log/JSUT"
-    result_path: "./output/result/JSUT"
-    tf_data_path: "./output/tf_data/JSUT"
   optimizer:
     batch_size: 16
     betas: [ 0.8, 0.999 ]
     learning_rate: 0.0002
     lr_decay: 0.999
+    eps: 0.000000001
   step:
-    total_step: 500000
+    total_epoch: 3000
     log_step: 100
     synth_step: 1000
     val_step: 1000
     save_step: 10000
-    variance_learn_start: 5000
+    feat_learn_start: 1000
+  loss_balance:
+    mel: 45.0
+    kl: 1.0
+    align: 2.0
+    reg: 1.0
+    gen: 1.0
+    fm: 0.0
+  seed: 1234
+  fp16_run: True

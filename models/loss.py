@@ -1,93 +1,101 @@
-# Copyright 2020 Nagoya University (Tomoki Hayashi)
-#  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
-
-"""Fastspeech2 related loss module for ESPnet2."""
-
-from typing import Tuple, Optional
-
-import numpy as np
-from scipy.stats import betabinom
 import torch
-import torch.nn.functional as F
-from torch import nn, Tensor, LongTensor
-
-from utils.mask import make_non_pad_mask
+from torch.nn import functional as F
 
 
-class FastSpeech2Loss(nn.Module):
-    """Loss function module for FastSpeech2."""
+from scipy.stats import betabinom
+from librosa.filters import mel as librosa_mel_fn
+import numpy as np
 
-    def __init__(self):
-        super().__init__()
-        # define criterions
-        self.l1_criterion = nn.L1Loss()
-        self.mse_criterion = nn.MSELoss()
-        self.forward_sum_loss = ForwardSumLoss()
+from models.upsampler.utils import CheapTrick
 
-    def forward(
-        self,
-        outputs: Tensor,
-        postnet_outputs: Tensor,
-        log_duration_outputs: Tensor,
-        pitch_outputs: Tensor,
-        mel_targets: Tensor,
-        duration_targets: LongTensor,
-        pitch_targets: Tensor,
-        log_p_attn: Tensor,
-        input_lens: LongTensor,
-        output_lens: LongTensor,
-        variance_learn: bool = True,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
-        """Calculate forward propagation.
 
-        Args:
-            outputs (Tensor): Batch of outputs (B, T_feats, odim).
-            postnet_outputs (Tensor): Batch of outputs after postnet (B, T_feats, odim).
-            log_duration_outputs (Tensor): Batch of outputs of duration predictor (B, T_text).
-            pitch_outputs (Tensor): Batch of outputs of pitch predictor (B, T_text, 1).
-            mel_targets (Tensor): Batch of target mel-spectrogram (B, T_feats, odim).
-            duration_targets (LongTensor): Batch of durations (B, T_text).
-            pitch_targets (Tensor): Batch of target token-averaged pitch (B, T_text, 1).
-            log_p_attn (Tensor): Batch of log probability of attention matrix (B, T_feats, T_text).
-            input_lens (LongTensor): Batch of the lengths of each input (B,).
-            output_lens (LongTensor): Batch of the lengths of each target (B,).
-            variance_learn (bool): variance predictor learn or not
+def feature_loss(fmap_r, fmap_g):
+    loss = 0
+    for dr, dg in zip(fmap_r, fmap_g):
+        for rl, gl in zip(dr, dg):
+            rl = rl.float().detach()
+            gl = gl.float()
+            loss += torch.mean(torch.abs(rl - gl))
 
-        Returns:
-            Tensor: Total loss value.
-            Tensor: Mel-spectrogram loss value
-            Tensor: Mel-spectrogram with Postnet loss value.
-            Tensor: Duration predictor loss value.
-            Tensor: Pitch predictor loss value.
-            Tensor: Forward sum loss value.
+    return loss * 2
 
-        """
-        # apply mask to remove padded part
-        output_masks = make_non_pad_mask(output_lens).unsqueeze(-1).to(mel_targets.device)
-        outputs = outputs.masked_select(output_masks)
-        postnet_outputs = postnet_outputs.masked_select(output_masks)
-        mel_targets = mel_targets.masked_select(output_masks)
-        duration_masks = make_non_pad_mask(input_lens).to(mel_targets.device)
-        log_duration_outputs = log_duration_outputs.squeeze(-1).masked_select(duration_masks)
-        log_duration_targets = torch.log(duration_targets.float() + 1.0)
-        log_duration_targets = log_duration_targets.masked_select(duration_masks)
-        pitch_masks = make_non_pad_mask(input_lens).to(mel_targets.device)
-        pitch_outputs = pitch_outputs.squeeze(-1).masked_select(pitch_masks)
-        pitch_targets = pitch_targets.squeeze(-1).masked_select(pitch_masks)
 
-        # calculate loss
-        mel_loss = self.l1_criterion(outputs, mel_targets)
-        postnet_mel_loss = self.l1_criterion(postnet_outputs, mel_targets)
-        duration_loss = self.mse_criterion(log_duration_outputs, log_duration_targets)
-        pitch_loss = self.mse_criterion(pitch_outputs, pitch_targets)
-        forward_sum_loss = self.forward_sum_loss(log_p_attn, input_lens, output_lens)
-        forward_sum_loss *= 2.0  # loss scaling
+def discriminator_loss(disc_real_outputs, disc_generated_outputs):
+    loss = 0
+    r_losses = []
+    g_losses = []
+    for dr, dg in zip(disc_real_outputs, disc_generated_outputs):
+        dr = dr.float()
+        dg = dg.float()
+        r_loss = torch.mean((1 - dr) ** 2)
+        g_loss = torch.mean(dg**2)
+        loss += r_loss + g_loss
+        r_losses.append(r_loss.item())
+        g_losses.append(g_loss.item())
 
-        total_loss = mel_loss + postnet_mel_loss + forward_sum_loss
-        if variance_learn:
-            total_loss += duration_loss + pitch_loss
+    return loss, r_losses, g_losses
 
-        return total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss, forward_sum_loss
+
+def generator_loss(disc_outputs):
+    loss = 0
+    gen_losses = []
+    for dg in disc_outputs:
+        dg = dg.float()
+        l = torch.mean((1 - dg) ** 2)
+        gen_losses.append(l.item())
+        loss += l
+
+    return loss, gen_losses
+
+
+def kl_loss(z_p, logs_q, m_p, logs_p, z_mask):
+    """
+    z_p, logs_q: [b, h, t_t]
+    m_p, logs_p: [b, h, t_t]
+    """
+    z_p = z_p.float()
+    logs_q = logs_q.float()
+    m_p = m_p.float()
+    logs_p = logs_p.float()
+    z_mask = z_mask.float()
+
+    kl = logs_p - logs_q - 0.5
+    kl += 0.5 * ((z_p - m_p) ** 2) * torch.exp(-2.0 * logs_p)
+    kl = torch.sum(kl * z_mask)
+    l = kl / torch.sum(z_mask)
+    return l
+
+
+def stft(
+    x, fft_size, hop_size, win_length, window, center=True, onesided=True, power=False
+):
+    """Perform STFT and convert to magnitude spectrogram.
+    Args:
+        x (Tensor): Input signal tensor (B, T).
+        fft_size (int): FFT size.
+        hop_size (int): Hop size.
+        win_length (int): Window length.
+        window (str): Window function type.
+    Returns:
+        Tensor: Magnitude spectrogram (B, #frames, fft_size // 2 + 1).
+    """
+    x_stft = torch.stft(
+        x,
+        fft_size,
+        hop_size,
+        win_length,
+        window,
+        center=center,
+        onesided=onesided,
+        return_complex=False,
+    )
+    real = x_stft[..., 0]
+    imag = x_stft[..., 1]
+
+    if power:
+        return torch.clamp(real**2 + imag**2, min=1e-7).transpose(2, 1)
+    else:
+        return torch.sqrt(torch.clamp(real**2 + imag**2, min=1e-7)).transpose(2, 1)
 
 
 class ForwardSumLoss(torch.nn.Module):
@@ -187,3 +195,120 @@ class ForwardSumLoss(torch.nn.Module):
             bb_prior[bidx, :T, :N] = prob
 
         return bb_prior
+
+
+class ResidualLoss(torch.nn.Module):
+    """The regularization loss of hn-uSFGAN."""
+
+    def __init__(
+        self,
+        sample_rate=24000,
+        fft_size=2048,
+        hop_size=120,
+        f0_floor=100,
+        f0_ceil=840,
+        n_mels=80,
+        fmin=0,
+        fmax=None,
+        power=False,
+        elim_0th=True,
+    ):
+        """Initialize ResidualLoss module.
+        Args:
+            sample_rate (int): Sampling rate.
+            fft_size (int): FFT size.
+            hop_size (int): Hop size.
+            f0_floor (int): Minimum F0 value.
+            f0_ceil (int): Maximum F0 value.
+            n_mels (int): Number of Mel basis.
+            fmin (int): Minimum frequency for Mel.
+            fmax (int): Maximum frequency for Mel.
+            power (bool): Whether to use power or magnitude spectrogram.
+            elim_0th (bool): Whether to exclude 0th cepstrum in CheapTrick.
+                If set to true, power is estimated by source-network.
+        """
+        super(ResidualLoss, self).__init__()
+        self.sample_rate = sample_rate
+        self.fft_size = fft_size
+        self.hop_size = hop_size
+        self.cheaptrick = CheapTrick(
+            sample_rate=sample_rate,
+            hop_size=hop_size,
+            fft_size=fft_size,
+            f0_floor=f0_floor,
+            f0_ceil=f0_ceil,
+        )
+        self.win_length = fft_size
+        self.register_buffer("window", torch.hann_window(self.win_length))
+
+        # define mel-filter-bank
+        self.n_mels = n_mels
+        self.fmin = fmin
+        self.fmax = fmax if fmax is not None else sample_rate // 2
+        melmat = librosa_mel_fn(sr=sample_rate, n_fft=fft_size, n_mels=n_mels, fmin=fmin, fmax=self.fmax).T
+        self.register_buffer("melmat", torch.from_numpy(melmat).float())
+
+        self.power = power
+        self.elim_0th = elim_0th
+
+    def forward(self, s, y, f):
+        """Calculate forward propagation.
+        Args:
+            s (Tensor): Predicted source excitation signal (B, 1, T).
+            y (Tensor): Ground truth signal (B, 1, T).
+            f (Tensor): F0 sequence (B, 1, T // hop_size).
+        Returns:
+            Tensor: Loss value.
+        """
+        s, y, f = s.squeeze(1), y.squeeze(1), f.squeeze(1)
+
+        with torch.no_grad():
+            # calculate log power (or magnitude) spectrograms
+            e = self.cheaptrick.forward(y, f, self.power, self.elim_0th)
+            y = stft(
+                y,
+                self.fft_size,
+                self.hop_size,
+                self.win_length,
+                self.window,
+                power=self.power,
+            )
+            # adjust length, (B, T', C)
+            minlen = min(e.size(1), y.size(1))
+            e, y = e[:, :minlen, :], y[:, :minlen, :]
+
+            # calculate mean power (or magnitude) of y
+            if self.elim_0th:
+                y_mean = y.mean(dim=-1, keepdim=True)
+
+            # calculate target of output source signal
+            y = torch.log(torch.clamp(y, min=1e-7))
+            t = (y - e).exp()
+            if self.elim_0th:
+                t_mean = t.mean(dim=-1, keepdim=True)
+                t = y_mean / t_mean * t
+
+            # apply mel-filter-bank and log
+            t = torch.matmul(t, self.melmat)
+            t = torch.log(torch.clamp(t, min=1e-7))
+
+        # calculate power (or magnitude) spectrogram
+        s = stft(
+            s,
+            self.fft_size,
+            self.hop_size,
+            self.win_length,
+            self.window,
+            power=self.power,
+        )
+        # adjust length, (B, T', C)
+        minlen = min(minlen, s.size(1))
+        s, t = s[:, :minlen, :], t[:, :minlen, :]
+
+        # apply mel-filter-bank and log
+        s = torch.matmul(s, self.melmat)
+        s = torch.log(torch.clamp(s, min=1e-7))
+
+        loss = F.l1_loss(s, t.detach())
+
+        return loss
