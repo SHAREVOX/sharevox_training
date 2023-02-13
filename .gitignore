@@ -2,9 +2,11 @@
 
 # data, checkpoint, and models
 preprocessed_data/
-output/
+logs/
 *.npy
 *.TextGrid
 fregan/*.pth.tar
 
 *.pyc
+*.wav
+*.onnx
