@@ -385,7 +385,7 @@ class JETS(nn.Module):
         z, _ = self.frame_prior_network(x, y_mask)
         smoothly_pitches = self.pitch_smoothly(pred_frame_pitches)
 
-        o, excs = self.forward_upsampler(z.transpose(1, 2), smoothly_pitches)
+        o, excs = self.forward_upsampler(z.transpose(1, 2), smoothly_pitches, g=g)
 
         return o, excs, attn, regulated_pitches, pred_regulated_pitches, smoothly_pitches, y_mask
 
