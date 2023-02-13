@@ -153,7 +153,7 @@ def run(rank: int, n_gpus: int, config: Config, model_dir: str, speakers: int):
         sampling_rate=config["preprocess"]["audio"]["sampling_rate"],
         hop_length=config["preprocess"]["stft"]["hop_length"],
         n_speakers=speakers,
-    ).to(device).to(device)
+    ).to(device)
 
     if model_config["upsampler_type"] == "sifigan":
         net_d = SiFiGANMultiPeriodAndResolutionDiscriminator().to(device)
