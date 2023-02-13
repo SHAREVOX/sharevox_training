@@ -585,12 +585,12 @@ def evaluate(
             # y, y_lengths = y.cuda(0), y_lengths.cuda(0)
 
             # remove else
-            x = phonemes[:1]
             x_lengths = phoneme_lens[:1]
-            spec = specs[:1]
+            x = phonemes[:1,:x_lengths]
             spec_lengths = spec_lens[:1]
-            pitch = pitches[:1]
-            accent = accents[:1]
+            spec = specs[:1,:spec_lengths]
+            pitch = pitches[:1,:spec_lengths]
+            accent = accents[:1,:x_lengths]
             y = wavs[:1]
             y_lengths = spec_lens[:1] * config["preprocess"]["stft"]["filter_length"]
             speaker = speakers[:1]
