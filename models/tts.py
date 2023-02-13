@@ -16,7 +16,7 @@ from models.transformer.encoder import Encoder as TransformerEncoder, EncoderCon
 from models.conformer.encoder import Encoder as ConformerEncoder
 from models.vits.stochastic_predictor import StochasticPredictor, StochasticPreditorConfig
 
-from text import symbols, accent_symbols
+from text import phoneme_symbols, accent_symbols
 from utils.mask import make_non_pad_mask
 from utils.slice import slice_segments, rand_slice_segments
 
@@ -57,7 +57,7 @@ class TextEncoder(nn.Module):
         super().__init__()
         self.hidden_channels = config["hidden"]
 
-        self.emb = nn.Embedding(len(symbols), self.hidden_channels)
+        self.emb = nn.Embedding(len(phoneme_symbols), self.hidden_channels)
         nn.init.normal_(self.emb.weight, 0.0, self.hidden_channels ** -0.5)
 
         if encoder_type == "conformer":
@@ -149,7 +149,7 @@ class JETS(nn.Module):
 
         padding_idx = 0
         self.phoneme_embedding = nn.Embedding(
-            num_embeddings=len(symbols),
+            num_embeddings=len(phoneme_symbols),
             embedding_dim=config["variance_encoder"]["hidden"],
             padding_idx=padding_idx
         )
@@ -241,17 +241,18 @@ class JETS(nn.Module):
     def forward_pitch_upsampler(self, pitches: Tensor, y_mask: Optional[Tensor] = None, g: Optional[Tensor] = None) -> Tensor:
         pitch_embed = self.pitch_embedding(pitches).transpose(1, 2)
         if y_mask is not None:
+            y_mask = y_mask.bool()
             pred_frame_pitches = self.pitch_upsampler(pitch_embed, ~y_mask, g=g)
         else:
             pred_frame_pitches = self.pitch_upsampler(pitch_embed, g=g)
 
+        return pred_frame_pitches
+
+    def pitch_smoothly(self, pitches: Tensor) -> Tensor:
         pitches = pitches * self.pitch_std + self.pitch_mean
         pitches[pitches < 1] = 1
         pitches[pitches > 750] = 1
 
-        return pred_frame_pitches
-
-    def pitch_smoothly(self, pitches: Tensor) -> Tensor:
         downsampled_pitches = torch.cat(
             (pitches[:, :, ::4], torch.ones(pitches.shape[0], 1, 4).to(pitches.device)), dim=2
         )
@@ -259,7 +260,7 @@ class JETS(nn.Module):
         upsampled_pitches[pitches == 1] = 1
         return upsampled_pitches
 
-    def forward_upsampler(self, z: Tensor, pitches: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward_upsampler(self, z: Tensor, pitches: Tensor, g: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
         dfs = []
         for df, us in zip(self.dense_factors, self.prod_upsample_scales):
             result = []
@@ -328,7 +329,7 @@ class JETS(nn.Module):
             z_slice = z.transpose(1, 2)
             pitch_slices = smoothly_pitches
 
-        o, excs = self.forward_upsampler(z_slice, pitch_slices)
+        o, excs = self.forward_upsampler(z_slice, pitch_slices, g)
 
         return (
             o,
@@ -378,13 +379,13 @@ class JETS(nn.Module):
         regulated_pitches = self.length_regulator(avg_pitches.transpose(1, 2), durations.long()).transpose(1, 2)
         pred_regulated_pitches = self.length_regulator(pred_pitches.transpose(1, 2), pred_durations.long()).transpose(1, 2)
 
-        y_mask = make_non_pad_mask(torch.tensor([regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
+        y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
-        pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, y_mask, g)
+        pred_frame_pitches = self.forward_pitch_upsampler(pred_regulated_pitches, y_mask, g)
         z, _ = self.frame_prior_network(x, y_mask)
         smoothly_pitches = self.pitch_smoothly(pred_frame_pitches)
 
-        o, excs = self.forward_upsampler(z, smoothly_pitches)
+        o, excs = self.forward_upsampler(z.transpose(1, 2), smoothly_pitches)
 
         return o, excs, attn, regulated_pitches, pred_regulated_pitches, smoothly_pitches, y_mask
 
@@ -411,7 +412,7 @@ class VITS(JETS):
             hop_length,
             n_speakers,
             onnx,
-            kwargs
+            **kwargs
         )
 
         self.frame_prior_network = FramePriorNetwork(
@@ -525,9 +526,9 @@ class VITS(JETS):
         regulated_pitches = self.length_regulator(avg_pitches.transpose(1, 2), durations.long()).transpose(1, 2)
         pred_regulated_pitches = self.length_regulator(pred_pitches.transpose(1, 2), pred_durations.long()).transpose(1, 2)
 
-        y_mask = make_non_pad_mask(torch.tensor([regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
+        y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
-        pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, y_mask, g)
+        pred_frame_pitches = self.forward_pitch_upsampler(pred_regulated_pitches, y_mask, g)
         _, m_p, logs_p, _ = self.frame_prior_network(x, y_mask.bool())
         smoothly_pitches = self.pitch_smoothly(pred_frame_pitches)
 

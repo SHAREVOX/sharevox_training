@@ -1,13 +1,14 @@
 import argparse
 import os
 import json
+from typing import Union
 
 import torch
 import yaml
 
 from config import Config
 from models.fastspeech.length_regulator import LengthRegulator
-from models.tts import JETS
+from models.tts import VITS, JETS
 from models.upsampler.utils import dilated_factor
 from text import _symbol_to_id
 
@@ -26,31 +27,18 @@ OPSET = onnx_stable_opsets[-1]
 
 
 class VariancePredictor(torch.nn.Module):
-    def __init__(self, generator: JETS) -> None:
+    def __init__(self, generator: Union[VITS, JETS]) -> None:
         super().__init__()
-        self.phoneme_embedding = generator.phoneme_embedding
-        self.accent_embedding = generator.accent_embedding
-        self.variance_encoder = generator.variance_encoder
-        self.pitch_predictor = generator.pitch_predictor
-        self.duration_predictor = generator.duration_predictor
-        self.pitch_std = generator.pitch_std
-        self.pitch_mean = generator.pitch_mean
+        self.generator = generator
         self.sampling_rate = generator.sampling_rate
         self.hop_length = generator.hop_length
-
-        self.emb_g = generator.emb_g
+        self.pitch_std = generator.pitch_std
+        self.pitch_mean = generator.pitch_mean
 
     def forward(self, phonemes, accents, speakers):
-        g = self.emb_g(speakers).unsqueeze(-1)  # [b, h, 1]
+        g = self.generator.emb_g(speakers).unsqueeze(-1)  # [b, h, 1]
 
-        phoneme_embedding = self.phoneme_embedding(phonemes)
-        accent_embedding = self.accent_embedding(accents)
-
-        duration_hs, _ = self.variance_encoder(phoneme_embedding, None)
-        pitch_hs, _ = self.variance_encoder(phoneme_embedding + accent_embedding, None)
-
-        pred_durations = self.duration_predictor(duration_hs, g=g).transpose(1, 2)
-        pred_pitches = self.pitch_predictor(pitch_hs, g=g).transpose(1, 2)
+        pred_pitches, pred_durations = self.generator.forward_variance(phonemes, accents, g=g)
 
         durations = torch.clamp((torch.exp(pred_durations) - 1) / (self.sampling_rate / self.hop_length), min=0.01)
         pitches = pred_pitches * self.pitch_std + self.pitch_mean
@@ -58,17 +46,18 @@ class VariancePredictor(torch.nn.Module):
         pitches[pitches > 750] = 1
         pitches = torch.log(pitches)
 
-        return pitches, durations
+        return pitches.transpose(1, 2), durations.transpose(1, 2)
 
 
 class FeatureEmbedder(torch.nn.Module):
-    def __init__(self, generator: JETS) -> None:
+    def __init__(self, generator: Union[VITS, JETS]) -> None:
         super().__init__()
         self.enc_p = generator.enc_p
         self.pitch_embedding = generator.pitch_embedding
         self.pitch_std = generator.pitch_std
         self.pitch_mean = generator.pitch_mean
 
+    @torch.no_grad()
     def forward(self, phonemes):
         x, _ = self.enc_p(phonemes)
         return x.transpose(1, 2)
@@ -106,63 +95,43 @@ class GaussianUpsampling(torch.nn.Module):
 
 
 class Decoder(torch.nn.Module):
-    def __init__(self, generator: JETS) -> None:
+    def __init__(self, generator: Union[VITS, JETS]) -> None:
         super().__init__()
         self.pitch_std = generator.pitch_std
         self.pitch_mean = generator.pitch_mean
-        self.emb_g = generator.emb_g
-        self.frame_prior_network = generator.frame_prior_network
-        self.signal_generator = generator.signal_generator
-        self.dec = generator.dec
-        self.dense_factors = generator.dense_factors
-        self.prod_upsample_scales = generator.prod_upsample_scales.tolist()
-        self.sampling_rate = generator.sampling_rate
-        self.pitch_embedding = generator.pitch_embedding
-        self.pitch_upsampler = generator.pitch_upsampler
-        self.f0_upsampler = generator.f0_upsampler
+        self.generator = generator
 
     @torch.no_grad()
     def forward(self, x, pitch, speaker):
-        g = self.emb_g(speaker).unsqueeze(-1)
+        g = self.generator.emb_g(speaker).unsqueeze(-1)
 
         pitch = (torch.exp(pitch) - self.pitch_mean) / self.pitch_std
+        pitch = pitch.unsqueeze(1)
+        pred_frame_pitches = self.generator.forward_pitch_upsampler(pitch, g=g)
+        smoothly_pitches = self.generator.pitch_smoothly(pred_frame_pitches)
 
-        pitch_embed = self.pitch_embedding(pitch)
-        pred_frame_pitches = self.pitch_upsampler(pitch_embed, g=g)
-        frame_pitches = pred_frame_pitches * self.pitch_std + self.pitch_mean
-        frame_pitches[frame_pitches < 1] = 1
-        downsampled_pitches = torch.cat((frame_pitches[:, :, ::4], torch.ones(1, 1, 4)), dim=2)
-        upsampled_pitches = self.f0_upsampler(downsampled_pitches)
-        linear_pitches = upsampled_pitches[:, :, :pitch.shape[1]]
-        linear_pitches[pitch.unsqueeze(1) == 1] = 1
+        if hasattr(self.generator, "flow"):
+            _, m_p, logs_p, _ = self.generator.frame_prior_network(x)
+            z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p)
+            y_mask = torch.ones_like(pitch)
+            z = self.generator.flow(z_p, y_mask, g=g, inverse=True)
+        else:
+            z, _ = self.generator.frame_prior_network(x, None)
+            z = z.transpose(1, 2)
 
-        z, _ = self.frame_prior_network(x, None)
-
-        dfs = []
-        for df, us in zip(self.dense_factors, self.prod_upsample_scales):
-            result = []
-            # print(frame_pitches.shape)
-            for frame_pitch in linear_pitches:
-                dilated_tensor = dilated_factor(frame_pitch, self.sampling_rate, df)
-                result += [
-                    torch.stack([dilated_tensor for _ in range(us)], -1).reshape(dilated_tensor.shape[0], -1)
-                ]
-                dfs.append(torch.cat(result, dim=0).unsqueeze(1))
-        sin_waves = self.signal_generator(linear_pitches)
-        wav, _ = self.dec(z.transpose(1, 2), f0=sin_waves, d=dfs, g=g)
+        wav, _ = self.generator.forward_upsampler(z, smoothly_pitches)
         return wav.squeeze(1)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-c",
-        "--config",
+        "config",
         type=str,
-        default="./configs/base.yaml",
         help="YAML file for configuration",
     )
     parser.add_argument("-m", "--model", type=str, required=True, help="Model name")
+    parser.add_argument("-s", "--speakers", type=int, default=10, help="speaker count")
 
     args = parser.parse_args()
     model_dir = os.path.join("./logs", args.model)
@@ -181,14 +150,24 @@ if __name__ == "__main__":
     gaussian_model = GaussianUpsampling().to(device)
     gaussian_model.eval()
 
-    net_g = JETS(
-        config["model"],
+    model_config = config["model"]
+    model_type = model_config["model_type"]
+    
+    if model_type == "vits":
+        Model = VITS
+    elif model_type == "jets":
+        Model = JETS
+    else:
+        raise Exception(f"Unknown model type: {model_type}")
+
+    net_g = Model(
+        model_config,
         spec_channels=config["preprocess"]["stft"]["filter_length"] // 2 + 1,
         pitch_mean=pitch_mean,
         pitch_std=pitch_std,
         sampling_rate=config["preprocess"]["audio"]["sampling_rate"],
         hop_length=config["preprocess"]["stft"]["hop_length"],
-        n_speakers=10,
+        n_speakers=args.speakers,
         onnx=True,
     ).to(device)
 
@@ -260,6 +239,7 @@ if __name__ == "__main__":
     #     opset_version=OPSET,
     # )
 
+    print(pitch_lr.shape)
     torch.onnx.export(
         decoder,
         (

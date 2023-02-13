@@ -51,10 +51,8 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-c",
-        "--config",
+        "config",
         type=str,
-        default="./configs/base.yaml",
         help="YAML file for configuration",
     )
     parser.add_argument("-m", "--model", type=str, required=True, help="Model name")
@@ -139,29 +137,24 @@ def run(rank: int, n_gpus: int, config: Config, model_dir: str, speakers: int):
 
     model_config = config["model"]
     model_type = model_config["model_type"]
+    
     if model_type == "vits":
-        net_g = VITS(
-            model_config,
-            spec_channels=config["preprocess"]["stft"]["filter_length"] // 2 + 1,
-            pitch_mean=pitch_mean,
-            pitch_std=pitch_std,
-            sampling_rate=config["preprocess"]["audio"]["sampling_rate"],
-            hop_length=config["preprocess"]["stft"]["hop_length"],
-            n_speakers=speakers,
-        ).to(device)
+        Model = VITS
     elif model_type == "jets":
-        net_g = JETS(
-            model_config,
-            spec_channels=config["preprocess"]["stft"]["filter_length"] // 2 + 1,
-            pitch_mean=pitch_mean,
-            pitch_std=pitch_std,
-            sampling_rate=config["preprocess"]["audio"]["sampling_rate"],
-            hop_length=config["preprocess"]["stft"]["hop_length"],
-            n_speakers=speakers,
-        ).to(device)
+        Model = JETS
     else:
         raise Exception(f"Unknown model type: {model_type}")
-    net_g = net_g.to(device)
+
+    net_g = Model(
+        model_config,
+        spec_channels=config["preprocess"]["stft"]["filter_length"] // 2 + 1,
+        pitch_mean=pitch_mean,
+        pitch_std=pitch_std,
+        sampling_rate=config["preprocess"]["audio"]["sampling_rate"],
+        hop_length=config["preprocess"]["stft"]["hop_length"],
+        n_speakers=speakers,
+    ).to(device).to(device)
+
     if model_config["upsampler_type"] == "sifigan":
         net_d = SiFiGANMultiPeriodAndResolutionDiscriminator().to(device)
     else:
