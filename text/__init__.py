@@ -53,6 +53,8 @@ phoneme_symbols = [
 _symbol_to_id = {s: i for i, s in enumerate(phoneme_symbols)}
 _id_to_symbol = {i: s for i, s in enumerate(phoneme_symbols)}
 
+unvoiced_mora_phoneme_list = ["A", "I", "U", "E", "O", "cl", "pau"]
+mora_phoneme_list = ["a", "i", "u", "e", "o", "N"] + unvoiced_mora_phoneme_list
 
 accent_symbols = [
     "[",  # pitch up

@@ -288,6 +288,7 @@ def train_and_evaluate(
             phonemes,
             phoneme_lens,
             _,
+            moras,
             accents,
             wavs,
             specs,
@@ -313,7 +314,7 @@ def train_and_evaluate(
                 z_mask,
                 loss_bin,
                 loss_vae,
-            ) = net_g(phonemes, phoneme_lens, accents, pitches, specs, spec_lens, speakers)
+            ) = net_g(phonemes, phoneme_lens, moras, accents, pitches, specs, spec_lens, speakers)
 
             mel = spec_to_mel_torch(
                 specs.transpose(1, 2),
@@ -479,9 +480,9 @@ def train_and_evaluate(
                     speaker = speakers[:1]
                     (
                         y_reconst, *_
-                    ) = net_g(x, x_lengths, accent, pitch, spec, spec_lengths, speaker, slice=False)
+                    ) = net_g(x, x_lengths, moras, accent, pitch, spec, spec_lengths, speaker, slice=False)
                     y_hat, excs, attn, regulated_pitches, pred_regulated_pitches, frame_pitches, mask = \
-                        net_g.module.infer(x, x_lengths, accent, pitch, spec, spec_lengths, sid=speaker)
+                        net_g.module.infer(x, x_lengths, moras, accent, pitch, spec, spec_lengths, sid=speaker)
                     y_hat_lengths = mask.sum([1, 2]).long() * config["preprocess"]["stft"]["hop_length"]
 
                     mel = spec_to_mel_torch(
@@ -572,6 +573,7 @@ def evaluate(
                 phonemes,
                 phoneme_lens,
                 max_phoneme_len,
+                moras,
                 accents,
                 wavs,
                 specs,
@@ -596,7 +598,7 @@ def evaluate(
             speaker = speakers[:1]
             break
         y_hat, excs, attn, regulated_pitches, pred_regulated_pitches, frame_pitches, mask = \
-            generator.module.infer(x, x_lengths, accent, pitch, spec, spec_lengths, sid=speaker)
+            generator.module.infer(x, x_lengths, moras, accent, pitch, spec, spec_lengths, sid=speaker)
 
         y_hat_lengths = mask.sum([1, 2]).long() * config["preprocess"]["stft"]["hop_length"]
 

@@ -7,8 +7,8 @@ from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data.distributed import DistributedSampler
 
 from preprocessor import PreProcessConfig
-from text import _symbol_to_id as phoneme_to_id
-from utils.pad import pad_1D, pad_2D #, pad_3D
+from text import _symbol_to_id as phoneme_to_id, mora_phoneme_list
+from utils.pad import pad_1D, pad_2D, pad_3D
 
 from typing import TypedDict, List, Tuple, Dict, Optional
 
@@ -51,6 +51,7 @@ class DatasetItem(TypedDict):
     id: str
     speaker: int
     text: np.ndarray
+    mora: np.ndarray
     accent: np.ndarray
     wav: np.ndarray
     spec: np.ndarray
@@ -63,6 +64,7 @@ ReProcessedItem = Tuple[
     np.ndarray,
     np.ndarray,
     np.int64,
+    np.ndarray,
     np.ndarray,
     np.ndarray,
     np.ndarray,
@@ -104,7 +106,18 @@ class Dataset(TorchDataset):
         basename = self.basename[idx]
         speaker = self.speaker[idx]
         speaker_id = self.speaker_map[speaker]
-        phone = np.array([phoneme_to_id[p] for p in self.text[idx].split(" ")])
+        phonemes = self.text[idx].split(" ")
+        mora_count = 0
+        phone = np.zeros(len(phonemes))
+        for i, p in enumerate(phonemes):
+            mora_count += p in mora_phoneme_list
+            phone[i] = phoneme_to_id[p]
+        mora = np.zeros((mora_count, len(phonemes)))
+        index = 0
+        for j, p in enumerate(phonemes):
+            mora[index][j] = 1
+            if p in mora_phoneme_list:
+                index += 1
         accent_path = os.path.join(
             self.preprocessed_path,
             "accent",
@@ -134,6 +147,7 @@ class Dataset(TorchDataset):
             id=basename,
             speaker=speaker_id,
             text=phone,
+            mora=mora,
             accent=accent,
             wav=wav,
             spec=spec,
@@ -170,16 +184,19 @@ class Dataset(TorchDataset):
         ids = [data[idx]["id"] for idx in idxs]
         speakers = [data[idx]["speaker"] for idx in idxs]
         texts = [data[idx]["text"] for idx in idxs]
+        moras = [data[idx]["mora"] for idx in idxs]
         accents = [data[idx]["accent"] for idx in idxs]
         wavs = [data[idx]["wav"] for idx in idxs]
         specs = [data[idx]["spec"] for idx in idxs]
         pitches = [data[idx]["pitch"] for idx in idxs]
 
         text_lens = np.array([text.shape[0] for text in texts])
+        mora_lens = np.array([mora.shape[0] for mora in moras])
         spec_lens = np.array([spec.shape[0] for spec in specs])
 
         speakers = np.array(speakers)
         texts = pad_1D(texts)
+        moras = pad_3D(moras, len(idxs), max(mora_lens), max(text_lens))
         accents = pad_1D(accents)
         wavs = pad_1D(wavs)
         specs = pad_2D(specs)
@@ -194,6 +211,7 @@ class Dataset(TorchDataset):
             texts,
             text_lens,
             max_text_len,
+            moras,
             accents,
             wavs,
             specs,
@@ -333,15 +351,16 @@ class DistributedBucketSampler(DistributedSampler):
 if __name__ == "__main__":
     # Test
     import yaml
+    from config import Config
     from torch.utils.data import DataLoader
 
     device = torch.device("cpu")
-    preprocess_config = yaml.load(
+    config: Config = yaml.load(
         open("./config/default.yaml", "r"), Loader=yaml.FullLoader
     )
-    train_config = yaml.load(
-        open("./config/default.yaml", "r"), Loader=yaml.FullLoader
-    )
+
+    preprocess_config = config["preprocess"]
+    train_config = config["train"]
 
     train_dataset = Dataset(
         "train.txt", preprocess_config, train_config

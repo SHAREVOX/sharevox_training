@@ -12,6 +12,7 @@ ReProcessedItemTorch = Tuple[
     Tensor,
     LongTensor,
     np.int64,
+    LongTensor,
     Tensor,
     Tensor,
     Tensor,
@@ -28,6 +29,7 @@ def to_device(data: ReProcessedItem, device: TorchDevice) -> ReProcessedItemTorc
         phonemes,
         phoneme_lens,
         max_phoneme_len,
+        moras,
         accents,
         wavs,
         specs,
@@ -39,6 +41,7 @@ def to_device(data: ReProcessedItem, device: TorchDevice) -> ReProcessedItemTorc
     speakers = torch.autograd.Variable(torch.from_numpy(speakers).long().to(device, non_blocking=True))
     phonemes = torch.autograd.Variable(torch.from_numpy(phonemes).long().to(device, non_blocking=True))
     phoneme_lens = torch.autograd.Variable(torch.from_numpy(phoneme_lens).long().to(device, non_blocking=True))
+    moras = torch.autograd.Variable(torch.from_numpy(moras).long().to(device, non_blocking=True))
     accents = torch.autograd.Variable(torch.from_numpy(accents).long().to(device, non_blocking=True))
     wavs = torch.autograd.Variable(torch.from_numpy(wavs).float().to(device, non_blocking=True))
     specs = torch.autograd.Variable(torch.from_numpy(specs).float().to(device, non_blocking=True))
@@ -51,6 +54,7 @@ def to_device(data: ReProcessedItem, device: TorchDevice) -> ReProcessedItemTorc
         phonemes,
         phoneme_lens,
         max_phoneme_len,
+        moras,
         accents,
         wavs,
         specs,

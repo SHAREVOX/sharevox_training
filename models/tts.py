@@ -287,6 +287,7 @@ class JETS(nn.Module):
         self,
         phonemes: Tensor,
         phoneme_lens: LongTensor,
+        moras: LongTensor,
         accents: Tensor,
         pitches: Tensor,
         specs: Tensor,
@@ -303,13 +304,13 @@ class JETS(nn.Module):
         pred_pitches, pred_durations = self.forward_variance(phonemes, accents, x_mask, g)
 
         pitches = pitches.unsqueeze(1)
-        avg_pitches, durations, attn, bin_loss = self.extractor(
-            (x + g).transpose(1, 2), pitches, specs, phoneme_lens, spec_lens
+        mora_avg_pitches, durations, mora_durations, attn, bin_loss = self.extractor(
+            (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
 
         x = self.length_regulator(x.transpose(1, 2), durations.long())
 
-        regulated_pitches = self.length_regulator(avg_pitches.transpose(1, 2), durations.long()).transpose(1, 2)
+        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations.long()).transpose(1, 2)
         y_mask = make_non_pad_mask(spec_lens).unsqueeze(1).to(x.device)
 
         pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, y_mask, g)
@@ -352,6 +353,7 @@ class JETS(nn.Module):
         self,
         phonemes: Tensor,
         phoneme_lens: LongTensor,
+        moras: LongTensor,
         accents: Tensor,
         pitches: TextEncoder,
         specs: Tensor,
@@ -367,17 +369,19 @@ class JETS(nn.Module):
         pred_pitches, pred_durations = self.forward_variance(phonemes, accents, x_mask, g)
 
         pitches = pitches.unsqueeze(1)
-        avg_pitches, durations, attn, _ = self.extractor(
-            (x + g).transpose(1, 2), pitches, specs, phoneme_lens, spec_lens
+        mora_avg_pitches, _, mora_durations, attn, _ = self.extractor(
+            (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
 
         w = torch.exp(pred_durations) * x_mask
         pred_durations = torch.clip(torch.round(w).squeeze(1) - 1, min=1)
+        pred_mora_pitches = (moras * pred_pitches).sum(dim=-1)
+        pred_mora_durations = (moras * pred_durations).sum(dim=-1)
 
         x = self.length_regulator(x.transpose(1, 2), pred_durations.long())
 
-        regulated_pitches = self.length_regulator(avg_pitches.transpose(1, 2), durations.long()).transpose(1, 2)
-        pred_regulated_pitches = self.length_regulator(pred_pitches.transpose(1, 2), pred_durations.long()).transpose(1, 2)
+        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations.long()).transpose(1, 2)
+        pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations.long()).transpose(1, 2)
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
@@ -431,6 +435,7 @@ class VITS(JETS):
         self,
         phonemes: Tensor,
         phoneme_lens: LongTensor,
+        moras: LongTensor,
         accents: Tensor,
         pitches: Tensor,
         specs: Tensor,
@@ -447,13 +452,14 @@ class VITS(JETS):
         pred_pitches, pred_durations = self.forward_variance(phonemes, accents, x_mask, g)
 
         pitches = pitches.unsqueeze(1)
-        avg_pitches, durations, attn, bin_loss = self.extractor(
-            (x + g).transpose(1, 2), pitches, specs, phoneme_lens, spec_lens
+        mora_avg_pitches, durations, mora_durations, attn, bin_loss = self.extractor(
+            (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
+        avg_pitches = (moras.transpose(1, 2) * mora_avg_pitches).sum(dim=-1)
 
         x = self.length_regulator(x.transpose(1, 2), durations.long())
 
-        regulated_pitches = self.length_regulator(avg_pitches.transpose(1, 2), durations.long()).transpose(1, 2)
+        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations.long()).transpose(1, 2)
 
         z, m_q, logs_q, y_mask = self.enc_q(specs.transpose(1, 2), spec_lens, g=g)
         z_p = self.flow(z, y_mask, g=g)
@@ -499,6 +505,7 @@ class VITS(JETS):
         self,
         phonemes: Tensor,
         phoneme_lens: LongTensor,
+        moras: LongTensor,
         accents: Tensor,
         pitches: TextEncoder,
         specs: Tensor,
@@ -514,17 +521,19 @@ class VITS(JETS):
         pred_pitches, pred_durations = self.forward_variance(phonemes, accents, x_mask, g)
 
         pitches = pitches.unsqueeze(1)
-        avg_pitches, durations, attn, _ = self.extractor(
-            (x + g).transpose(1, 2), pitches, specs, phoneme_lens, spec_lens
+        mora_avg_pitches, _, mora_durations, attn, _ = self.extractor(
+            (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
 
         w = torch.exp(pred_durations) * x_mask
         pred_durations = torch.clip(torch.round(w).squeeze(1) - 1, min=1)
+        pred_mora_pitches = (moras * pred_pitches).sum(dim=-1).unsqueeze(1)
+        pred_mora_durations = (moras * pred_durations).sum(dim=-1)
 
         x = self.length_regulator(x.transpose(1, 2), pred_durations.long())
 
-        regulated_pitches = self.length_regulator(avg_pitches.transpose(1, 2), durations.long()).transpose(1, 2)
-        pred_regulated_pitches = self.length_regulator(pred_pitches.transpose(1, 2), pred_durations.long()).transpose(1, 2)
+        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations.long()).transpose(1, 2)
+        pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations.long()).transpose(1, 2)
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 

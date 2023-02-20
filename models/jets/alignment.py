@@ -172,9 +172,19 @@ class PitchAndDurationExtractor(nn.Module):
         super(PitchAndDurationExtractor, self).__init__()
         self.alignment_module = AlignmentModule(hidden_size, feat_size)
 
-    def forward(self, hs: Tensor, pitches: Tensor, mels: Tensor, phoneme_lens: LongTensor, mel_lens: LongTensor):
+    def forward(
+        self,
+        hs: Tensor,
+        moras: LongTensor,
+        pitches: Tensor,
+        mels: Tensor,
+        phoneme_lens: LongTensor,
+        mel_lens: LongTensor
+    ):
         h_masks = make_pad_mask(phoneme_lens).to(hs.device)
         log_p_attn = self.alignment_module(hs, mels, h_masks)
         durations, bin_loss = viterbi_decode(log_p_attn, phoneme_lens, mel_lens)
-        avg_pitches = average_by_duration(durations, pitches.squeeze(1), phoneme_lens, mel_lens).unsqueeze(1)
-        return avg_pitches, durations, log_p_attn, bin_loss
+        mora_durations = (moras * durations).sum(dim=-1)
+        # avg_pitches = average_by_duration(durations, pitches.squeeze(1), phoneme_lens, mel_lens).unsqueeze(1)
+        mora_avg_pitches = average_by_duration((moras * durations).sum(dim=-1), pitches.squeeze(1), phoneme_lens, mel_lens).unsqueeze(1)
+        return mora_avg_pitches, durations, mora_durations, log_p_attn, bin_loss
