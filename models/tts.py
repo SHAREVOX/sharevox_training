@@ -307,10 +307,11 @@ class JETS(nn.Module):
         mora_avg_pitches, durations, mora_durations, attn, bin_loss = self.extractor(
             (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
+        avg_pitches = (moras.transpose(1, 2).to(mora_avg_pitches.dtype) * mora_avg_pitches).sum(dim=-1).unsqueeze(1)
 
-        x = self.length_regulator(x.transpose(1, 2), durations.long())
+        x = self.length_regulator(x.transpose(1, 2), durations)
 
-        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations.long()).transpose(1, 2)
+        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
         y_mask = make_non_pad_mask(spec_lens).unsqueeze(1).to(x.device)
 
         pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, y_mask, g)
@@ -374,14 +375,14 @@ class JETS(nn.Module):
         )
 
         w = torch.exp(pred_durations) * x_mask
-        pred_durations = torch.clip(torch.round(w).squeeze(1) - 1, min=1)
-        pred_mora_pitches = (moras * pred_pitches).sum(dim=-1)
+        pred_durations = torch.clip(torch.round(w).squeeze(1) - 1, min=1).long()
+        pred_mora_pitches = (moras.to(pred_pitches.dtype) * pred_pitches).sum(dim=-1).unsqueeze(1)
         pred_mora_durations = (moras * pred_durations).sum(dim=-1)
 
-        x = self.length_regulator(x.transpose(1, 2), pred_durations.long())
+        x = self.length_regulator(x.transpose(1, 2), pred_durations)
 
-        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations.long()).transpose(1, 2)
-        pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations.long()).transpose(1, 2)
+        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
+        pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
@@ -455,11 +456,11 @@ class VITS(JETS):
         mora_avg_pitches, durations, mora_durations, attn, bin_loss = self.extractor(
             (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
-        avg_pitches = (moras.transpose(1, 2) * mora_avg_pitches).sum(dim=-1)
+        avg_pitches = (moras.transpose(1, 2).to(mora_avg_pitches.dtype) * mora_avg_pitches).sum(dim=-1).unsqueeze(1)
 
-        x = self.length_regulator(x.transpose(1, 2), durations.long())
+        x = self.length_regulator(x.transpose(1, 2), durations)
 
-        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations.long()).transpose(1, 2)
+        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
 
         z, m_q, logs_q, y_mask = self.enc_q(specs.transpose(1, 2), spec_lens, g=g)
         z_p = self.flow(z, y_mask, g=g)
@@ -526,14 +527,14 @@ class VITS(JETS):
         )
 
         w = torch.exp(pred_durations) * x_mask
-        pred_durations = torch.clip(torch.round(w).squeeze(1) - 1, min=1)
-        pred_mora_pitches = (moras * pred_pitches).sum(dim=-1).unsqueeze(1)
+        pred_durations = torch.clip(torch.round(w).squeeze(1) - 1, min=1).long()
+        pred_mora_pitches = (moras.to(pred_pitches.dtype) * pred_pitches).sum(dim=-1).unsqueeze(1)
         pred_mora_durations = (moras * pred_durations).sum(dim=-1)
 
-        x = self.length_regulator(x.transpose(1, 2), pred_durations.long())
+        x = self.length_regulator(x.transpose(1, 2), pred_durations)
 
-        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations.long()).transpose(1, 2)
-        pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations.long()).transpose(1, 2)
+        regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
+        pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 

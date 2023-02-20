@@ -475,14 +475,16 @@ def train_and_evaluate(
                     spec_lengths = spec_lens[:1]
                     spec = specs[:1, :spec_lengths[0]]
                     accent = accents[:1, :x_lengths[0]]
+                    mora = moras[:1,:,:x_lengths]
+                    mora = mora[:,:(mora == 1).nonzero(as_tuple=True)[1][-1]+1,:]
                     pitch = pitches[:1, :spec_lens[0]]
                     y = wavs[:1]
                     speaker = speakers[:1]
                     (
                         y_reconst, *_
-                    ) = net_g(x, x_lengths, moras, accent, pitch, spec, spec_lengths, speaker, slice=False)
+                    ) = net_g(x, x_lengths, mora, accent, pitch, spec, spec_lengths, speaker, slice=False)
                     y_hat, excs, attn, regulated_pitches, pred_regulated_pitches, frame_pitches, mask = \
-                        net_g.module.infer(x, x_lengths, moras, accent, pitch, spec, spec_lengths, sid=speaker)
+                        net_g.module.infer(x, x_lengths, mora, accent, pitch, spec, spec_lengths, sid=speaker)
                     y_hat_lengths = mask.sum([1, 2]).long() * config["preprocess"]["stft"]["hop_length"]
 
                     mel = spec_to_mel_torch(
@@ -593,12 +595,14 @@ def evaluate(
             spec = specs[:1,:spec_lengths]
             pitch = pitches[:1,:spec_lengths]
             accent = accents[:1,:x_lengths]
+            mora = moras[:1,:,:x_lengths]
+            mora = mora[:,:(mora == 1).nonzero(as_tuple=True)[1][-1]+1,:]
             y = wavs[:1]
             y_lengths = spec_lens[:1] * config["preprocess"]["stft"]["filter_length"]
             speaker = speakers[:1]
             break
         y_hat, excs, attn, regulated_pitches, pred_regulated_pitches, frame_pitches, mask = \
-            generator.module.infer(x, x_lengths, moras, accent, pitch, spec, spec_lengths, sid=speaker)
+            generator.module.infer(x, x_lengths, mora, accent, pitch, spec, spec_lengths, sid=speaker)
 
         y_hat_lengths = mask.sum([1, 2]).long() * config["preprocess"]["stft"]["hop_length"]
 
