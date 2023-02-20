@@ -6,7 +6,7 @@ numba
 torchtyping
 tqdm
 scipy
-sklearn
+scikit-learn
 librosa
 pyyaml
 pyworld
@@ -14,3 +14,5 @@ pyopenjtalk
 onnxruntime
 tensorboard
 matplotlib
+PyWavelets
+git+https://github.com/y-chan/pytorch_wavelets#e17a086
