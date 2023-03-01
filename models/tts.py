@@ -16,7 +16,7 @@ from models.transformer.encoder import Encoder as TransformerEncoder, EncoderCon
 from models.conformer.encoder import Encoder as ConformerEncoder
 from models.vits.stochastic_predictor import StochasticPredictor, StochasticPreditorConfig
 
-from text import phoneme_symbols, accent_symbols
+from text import phoneme_symbols, accent_symbols, _symbol_to_id
 from utils.mask import make_non_pad_mask
 from utils.slice import slice_segments, rand_slice_segments
 
@@ -136,6 +136,7 @@ class JETS(nn.Module):
 
         self.pitch_mean = pitch_mean
         self.pitch_std = pitch_std
+        self.unvoice_pitch = (1 - self.pitch_mean) / self.pitch_std
 
         self.onnx = onnx
 
@@ -172,7 +173,7 @@ class JETS(nn.Module):
         self.enc_p = TextEncoder(config["prior_encoder_type"], config["prior_encoder"])
         self.length_regulator = LengthRegulator()
         self.signal_generator = SignalGenerator(
-            sample_rate=sampling_rate, hop_size=hop_length
+            sample_rate=sampling_rate, hop_size=hop_length, noise_amp=0.003 if not onnx else 0,
         )
         upsampler_type = config["upsampler_type"]
         if upsampler_type == "sfregan2" or upsampler_type == "sfregan2m":
@@ -248,10 +249,12 @@ class JETS(nn.Module):
 
         return pred_frame_pitches
 
-    def pitch_smoothly(self, pitches: Tensor) -> Tensor:
+    def pitch_smoothly(self, pitches: Tensor, unvoice_mask: Optional[Tensor] = None) -> Tensor:
         pitches = pitches * self.pitch_std + self.pitch_mean
-        pitches[pitches < 1] = 1
+        pitches[pitches < 10] = 1
         pitches[pitches > 750] = 1
+        if unvoice_mask is not None:
+            pitches[unvoice_mask] = 1
 
         downsampled_pitches = torch.cat(
             (pitches[:, :, ::4], torch.ones(pitches.shape[0], 1, 4).to(pitches.device)), dim=2
@@ -307,16 +310,20 @@ class JETS(nn.Module):
         mora_avg_pitches, durations, mora_durations, attn, bin_loss = self.extractor(
             (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
-        avg_pitches = (moras.transpose(1, 2).to(mora_avg_pitches.dtype) * mora_avg_pitches).sum(dim=-1).unsqueeze(1)
+        with torch.no_grad():
+            avg_pitches = (moras.transpose(1, 2).to(mora_avg_pitches.dtype) * mora_avg_pitches).sum(dim=-1).unsqueeze(1)
 
         x = self.length_regulator(x.transpose(1, 2), durations)
+        regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), durations).transpose(1, 2)
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
+        unvoice_mask = (regulated_phonemes == _symbol_to_id["pau"]) | (regulated_phonemes == _symbol_to_id["cl"])
+        regulated_pitches[unvoice_mask] = self.unvoice_pitch
         y_mask = make_non_pad_mask(spec_lens).unsqueeze(1).to(x.device)
 
         pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, y_mask, g)
         z, _ = self.frame_prior_network(x, y_mask)
-        smoothly_pitches = self.pitch_smoothly(pitches)
+        smoothly_pitches = self.pitch_smoothly(pitches, unvoice_mask)
 
         if slice:
             z_slice, ids_slice = rand_slice_segments(
@@ -342,6 +349,7 @@ class JETS(nn.Module):
             avg_pitches,
             pred_pitches,
             pred_frame_pitches,
+            unvoice_mask,
             attn,
             ids_slice,
             x_mask,
@@ -370,25 +378,33 @@ class JETS(nn.Module):
         pred_pitches, pred_durations = self.forward_variance(phonemes, accents, x_mask, g)
 
         pitches = pitches.unsqueeze(1)
-        mora_avg_pitches, _, mora_durations, attn, _ = self.extractor(
+        mora_avg_pitches, durations, mora_durations, attn, _ = self.extractor(
             (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
 
         w = torch.exp(pred_durations) * x_mask
         pred_durations = torch.clip(torch.round(w).squeeze(1) - 1, min=1).long()
-        pred_mora_pitches = (moras.to(pred_pitches.dtype) * pred_pitches).sum(dim=-1).unsqueeze(1)
+        pred_mora_pitches = (moras.to(pred_pitches.dtype) * pred_pitches).sum(dim=-1) / moras.sum(-1)
+        pred_mora_pitches = pred_mora_pitches.unsqueeze(1)
         pred_mora_durations = (moras * pred_durations).sum(dim=-1)
 
         x = self.length_regulator(x.transpose(1, 2), pred_durations)
+        regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), durations).transpose(1, 2)
+        pred_regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), pred_durations).transpose(1, 2)
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
+        unvoice_mask = (regulated_phonemes == _symbol_to_id["pau"]) | (regulated_phonemes == _symbol_to_id["cl"])
+        regulated_pitches[unvoice_mask] = self.unvoice_pitch
+
         pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
+        pred_unvoice_mask = (pred_regulated_phonemes == _symbol_to_id["pau"]) | (pred_regulated_phonemes == _symbol_to_id["cl"])
+        pred_regulated_pitches[pred_unvoice_mask] = self.unvoice_pitch
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
         pred_frame_pitches = self.forward_pitch_upsampler(pred_regulated_pitches, y_mask, g)
         z, _ = self.frame_prior_network(x, y_mask)
-        smoothly_pitches = self.pitch_smoothly(pred_frame_pitches)
+        smoothly_pitches = self.pitch_smoothly(pred_frame_pitches, pred_unvoice_mask)
 
         o, excs = self.forward_upsampler(z.transpose(1, 2), smoothly_pitches, g=g)
 
@@ -456,18 +472,22 @@ class VITS(JETS):
         mora_avg_pitches, durations, mora_durations, attn, bin_loss = self.extractor(
             (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
-        avg_pitches = (moras.transpose(1, 2).to(mora_avg_pitches.dtype) * mora_avg_pitches).sum(dim=-1).unsqueeze(1)
+        with torch.no_grad():
+            avg_pitches = (moras.transpose(1, 2).to(mora_avg_pitches.dtype) * mora_avg_pitches).sum(dim=-1).unsqueeze(1)
 
         x = self.length_regulator(x.transpose(1, 2), durations)
+        regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), durations).transpose(1, 2)
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
+        unvoice_mask = (regulated_phonemes == _symbol_to_id["pau"]) | (regulated_phonemes == _symbol_to_id["cl"])
+        regulated_pitches[unvoice_mask] = self.unvoice_pitch
 
         z, m_q, logs_q, y_mask = self.enc_q(specs.transpose(1, 2), spec_lens, g=g)
         z_p = self.flow(z, y_mask, g=g)
 
         pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, y_mask, g)
         x, m_p, logs_p, _ = self.frame_prior_network(x, y_mask.bool())
-        smoothly_pitches = self.pitch_smoothly(pitches)
+        smoothly_pitches = self.pitch_smoothly(pitches, unvoice_mask)
 
         if slice:
             z_slice, ids_slice = rand_slice_segments(
@@ -493,6 +513,7 @@ class VITS(JETS):
             avg_pitches,
             pred_pitches,
             pred_frame_pitches,
+            unvoice_mask,
             attn,
             ids_slice,
             x_mask,
@@ -522,25 +543,33 @@ class VITS(JETS):
         pred_pitches, pred_durations = self.forward_variance(phonemes, accents, x_mask, g)
 
         pitches = pitches.unsqueeze(1)
-        mora_avg_pitches, _, mora_durations, attn, _ = self.extractor(
+        mora_avg_pitches, durations, mora_durations, attn, _ = self.extractor(
             (x + g).transpose(1, 2), moras, pitches, specs, phoneme_lens, spec_lens
         )
 
         w = torch.exp(pred_durations) * x_mask
         pred_durations = torch.clip(torch.round(w).squeeze(1) - 1, min=1).long()
-        pred_mora_pitches = (moras.to(pred_pitches.dtype) * pred_pitches).sum(dim=-1).unsqueeze(1)
+        pred_mora_pitches = (moras.to(pred_pitches.dtype) * pred_pitches).sum(dim=-1) / moras.sum(-1)
+        pred_mora_pitches = pred_mora_pitches.unsqueeze(1)
         pred_mora_durations = (moras * pred_durations).sum(dim=-1)
 
         x = self.length_regulator(x.transpose(1, 2), pred_durations)
+        regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), durations).transpose(1, 2)
+        pred_regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), pred_durations).transpose(1, 2)
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
+        unvoice_mask = (regulated_phonemes == _symbol_to_id["pau"]) | (regulated_phonemes == _symbol_to_id["cl"])
+        regulated_pitches[unvoice_mask] = self.unvoice_pitch
+
         pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
+        pred_unvoice_mask = (pred_regulated_phonemes == _symbol_to_id["pau"]) | (pred_regulated_phonemes == _symbol_to_id["cl"])
+        pred_regulated_pitches[pred_unvoice_mask] = self.unvoice_pitch
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
         pred_frame_pitches = self.forward_pitch_upsampler(pred_regulated_pitches, y_mask, g)
         _, m_p, logs_p, _ = self.frame_prior_network(x, y_mask.bool())
-        smoothly_pitches = self.pitch_smoothly(pred_frame_pitches)
+        smoothly_pitches = self.pitch_smoothly(pred_frame_pitches, pred_unvoice_mask)
 
         z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p)
         z = self.flow(z_p, y_mask, g=g, inverse=True)

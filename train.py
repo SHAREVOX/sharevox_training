@@ -280,6 +280,10 @@ def train_and_evaluate(
 
     net_g.train()
     net_d.train()
+    pitch_std = net_g.module.pitch_std
+    pitch_mean = net_g.module.pitch_mean
+    unvoice_pitch = net_g.module.unvoice_pitch
+
     for batch_idx, batch in enumerate(train_loader):
         batch = to_device(batch, device)
         (
@@ -308,6 +312,7 @@ def train_and_evaluate(
                 avg_pitches,
                 pred_pitches,
                 pred_frame_pitches,
+                unvoice_mask,
                 attn,
                 ids_slice,
                 x_mask,
@@ -375,8 +380,11 @@ def train_and_evaluate(
                     avg_pitches.to(dtype=pred_pitches.dtype).masked_select(x_mask),
                     pred_pitches.masked_select(x_mask)
                 )
+                with torch.no_grad():
+                    _pitches = pitches.unsqueeze(1).to(dtype=pred_pitches.dtype)
+                    _pitches[unvoice_mask] = unvoice_pitch
                 loss_frame_pitch = F.mse_loss(
-                    pitches.unsqueeze(1).to(dtype=pred_pitches.dtype).masked_select(z_mask.bool()),
+                    _pitches.masked_select(z_mask.bool()),
                     pred_frame_pitches.masked_select(z_mask.bool())
                 )
                 loss_mel = F.l1_loss(y_mel, y_hat_mel) * config["train"]["loss_balance"]["mel"]
@@ -512,16 +520,14 @@ def train_and_evaluate(
                         "train/audio": y_hat[0, :, : y_hat_lengths[0]],
                         "train/exc": excs[0, :, : y_hat_lengths[0]]
                     }
-                    pitch_std = net_g.module.pitch_std
-                    pitch_mean = net_g.module.pitch_mean
                     image_dict.update(
                         {
                             "train/gt_mel": plot_spectrogram_to_numpy(mel[0].detach().cpu().numpy()),
                             "train/compare_f0": plot_f0_to_numpy(
-                                pitches[0, :spec_lens[0]].detach().cpu().numpy() * pitch_std + pitch_mean,
-                                regulated_pitches[0, 0, :spec_lens[0]].detach().cpu().numpy() * pitch_std + pitch_mean,
-                                pred_regulated_pitches[0, 0, :spec_lens[0]].detach().cpu().numpy() * pitch_std + pitch_mean,
-                                frame_pitches[0, 0, :spec_lens[0]].detach().cpu().numpy()
+                                pitches[0].detach().cpu().numpy() * pitch_std + pitch_mean,
+                                regulated_pitches[0, 0].detach().cpu().numpy() * pitch_std + pitch_mean,
+                                pred_regulated_pitches[0, 0].detach().cpu().numpy() * pitch_std + pitch_mean,
+                                frame_pitches[0, 0].detach().cpu().numpy()
                             )
                         }
                     )
@@ -629,10 +635,10 @@ def evaluate(
     image_dict = {
         "gen/mel": plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy()),
         "gen/compare_f0": plot_f0_to_numpy(
-            pitches[0, :spec_lens[0]].detach().cpu().numpy() * pitch_std + pitch_mean,
-            regulated_pitches[0, 0, :spec_lens[0]].detach().cpu().numpy() * pitch_std + pitch_mean,
-            pred_regulated_pitches[0, 0, :spec_lens[0]].detach().cpu().numpy() * pitch_std + pitch_mean,
-            frame_pitches[0, 0, :spec_lens[0]].detach().cpu().numpy()
+            pitches[0].detach().cpu().numpy() * pitch_std + pitch_mean,
+            regulated_pitches[0, 0].detach().cpu().numpy() * pitch_std + pitch_mean,
+            pred_regulated_pitches[0, 0].detach().cpu().numpy() * pitch_std + pitch_mean,
+            frame_pitches[0, 0].detach().cpu().numpy()
         )
     }
     audio_dict = {

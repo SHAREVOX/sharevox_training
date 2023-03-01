@@ -185,7 +185,8 @@ class PitchAndDurationExtractor(nn.Module):
         log_p_attn = self.alignment_module(hs, mels, h_masks)
         durations, bin_loss = viterbi_decode(log_p_attn, phoneme_lens, mel_lens)
         durations = durations.long()
-        mora_durations = (moras * durations.unsqueeze(1)).sum(dim=-1)
+        with torch.no_grad():
+            mora_durations = (moras * durations.unsqueeze(1)).sum(dim=-1)
         # avg_pitches = average_by_duration(durations, pitches.squeeze(1), phoneme_lens, mel_lens).unsqueeze(1)
-        mora_avg_pitches = average_by_duration(mora_durations.to(pitches.dtype), pitches.squeeze(1), phoneme_lens, mel_lens).unsqueeze(1)
+        mora_avg_pitches = average_by_duration(mora_durations.float(), pitches.squeeze(1), phoneme_lens, mel_lens).unsqueeze(1)
         return mora_avg_pitches, durations, mora_durations, log_p_attn, bin_loss

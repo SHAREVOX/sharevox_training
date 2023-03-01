@@ -203,7 +203,7 @@ class Preprocessor:
         wav, duration = get_wav(self.config, speaker, basename)
 
         # Compute fundamental frequency
-        pitch, t = pw.harvest(
+        pitch, t = pw.dio(
             wav.astype(np.float64),
             self.sampling_rate,
             frame_period=self.hop_length / self.sampling_rate * 1000,
