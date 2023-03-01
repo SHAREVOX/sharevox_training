@@ -218,7 +218,7 @@ class JETS(nn.Module):
             config["pitch_embedding"]["hidden"],
             self.global_hidden
         )
-        self.f0_upsampler = nn.Upsample(scale_factor=4, mode="linear")
+        self.f0_upsampler = nn.Upsample(scale_factor=2, mode="linear")
 
         if n_speakers > 1:
             self.emb_g = nn.Embedding(n_speakers, self.global_hidden)
@@ -257,7 +257,7 @@ class JETS(nn.Module):
             pitches[unvoice_mask] = 1
 
         downsampled_pitches = torch.cat(
-            (pitches[:, :, ::4], torch.ones(pitches.shape[0], 1, 4).to(pitches.device)), dim=2
+            (pitches[:, :, ::2], torch.ones(pitches.shape[0], 1, 2).to(pitches.device)), dim=2
         )
         upsampled_pitches = self.f0_upsampler(downsampled_pitches)[:, :, :pitches.shape[2]]
         upsampled_pitches[pitches == 1] = 1
