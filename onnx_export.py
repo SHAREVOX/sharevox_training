@@ -241,7 +241,6 @@ if __name__ == "__main__":
     #     opset_version=OPSET,
     # )
 
-    print(pitch_lr.shape)
     torch.onnx.export(
         decoder,
         (
