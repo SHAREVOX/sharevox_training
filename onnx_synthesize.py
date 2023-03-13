@@ -6,13 +6,15 @@ import numpy as np
 from pyopenjtalk import extract_fullcontext
 
 from text import extract_phoneme_and_accents
-from text import phoneme_to_id, accent_to_id
+from text import _symbol_to_id as phoneme_to_id, _accent_to_id as accent_to_id
 import onnxruntime
 
 
 def preprocess_japanese(text):
     full_context_labels = extract_fullcontext(text)
     phonemes, accents = extract_phoneme_and_accents(full_context_labels)
+    phonemes = ["pau"] + phonemes + ["pau"]
+    accents = ["#"] + accents + ["#"]
     phonemes_seq = np.array([phoneme_to_id[phoneme] for phoneme in phonemes])
     accents_seq = np.array([accent_to_id[accent] for accent in accents])
 
@@ -47,7 +49,6 @@ if __name__ == "__main__":
 
     variance_session = onnxruntime.InferenceSession("variance_model.onnx", providers=['CPUExecutionProvider'])
     embedder_session = onnxruntime.InferenceSession("embedder_model.onnx", providers=['CPUExecutionProvider'])
-    gaussian_session = onnxruntime.InferenceSession("gaussian_model.onnx", providers=['CPUExecutionProvider'])
     decoder_session = onnxruntime.InferenceSession("decoder_model.onnx", providers=['CPUExecutionProvider'])
 
     pitches, durations = variance_session.run(["pitches", "durations"], {
@@ -58,18 +59,17 @@ if __name__ == "__main__":
 
     feature_embedded = embedder_session.run(["feature_embedded"], {
         "phonemes": phonemes,
-        "pitches": pitches[0].T,
-        "speakers": speakers,
     })[0]
 
-    durations = (durations[0].T * (48000 / 256)).astype(dtype=np.int64)
-    length_regulated_tensor = gaussian_session.run(["length_regulated_tensor"], {
-        "embedded_tensor": feature_embedded,
-        "durations": durations,
-    })[0]
+    durations = (durations[0].T * (48000 / 512)).astype(dtype=np.int64)
+    length_regulated_tensor = numpy.repeat(feature_embedded, durations[0], axis=1)
+    length_regulated_pitch = numpy.repeat(pitches, durations[0], axis=1)[0].T
 
     wav = decoder_session.run(["wav"], {
         "length_regulated_tensor": length_regulated_tensor,
+        "pitches": length_regulated_pitch,
+        "speakers": speakers,
     })[0]
 
-    wavfile.write(f"{args.text}.wav", 48000, wav[0])
+    wavfile.write(f"{args.text[:50]}.wav", 48000, wav[0])
+

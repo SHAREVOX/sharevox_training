@@ -49,8 +49,12 @@ phoneme_symbols = [
     "z",
 ]
 
-phoneme_to_id: Dict[str, int] = {s: i for i, s in enumerate(phoneme_symbols)}
-id_to_phoneme: Dict[int, str] = {i: s for i, s in enumerate(phoneme_symbols)}
+# Mappings from symbol to numeric ID and vice versa:
+_symbol_to_id = {s: i for i, s in enumerate(phoneme_symbols)}
+_id_to_symbol = {i: s for i, s in enumerate(phoneme_symbols)}
+
+unvoiced_mora_phoneme_list = ["A", "I", "U", "E", "O", "cl", "pau"]
+mora_phoneme_list = ["a", "i", "u", "e", "o", "N"] + unvoiced_mora_phoneme_list
 
 accent_symbols = [
     "[",  # pitch up
@@ -60,9 +64,8 @@ accent_symbols = [
     "_",  # not changing accent
 ]
 
-accent_to_id: Dict[str, int] = {s: i for i, s in enumerate(accent_symbols)}
-id_to_accent: Dict[int, str] = {i: s for i, s in enumerate(accent_symbols)}
-
+_accent_to_id: Dict[str, int] = {s: i for i, s in enumerate(accent_symbols)}
+_id_to_accent: Dict[int, str] = {i: s for i, s in enumerate(accent_symbols)}
 
 # full context label to accent label from ttslearn
 def numeric_feature_by_regex(regex: Pattern[str], s: str) -> int:

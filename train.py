@@ -1,488 +1,665 @@
-import argparse
+import logging
 import os
+import json
+import argparse
+import platform
+from typing import List, Optional, Tuple
 
-import torch
-import torch.multiprocessing as mp
 import yaml
-from torch import nn
-from torch.distributed import init_process_group
-from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader, DistributedSampler
+
+from config import Config
+from dataset import Dataset, DistributedBucketSampler
+import torch
+from torch import nn, optim
+from torch.nn import functional as F
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import torch.multiprocessing as mp
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP, DataParallel as DP
+from torch.cuda.amp import autocast, GradScaler
+
 from tqdm import tqdm
 
-import fregan
-from dataset import Dataset
-from modules.gaussian_upsampling import GaussianUpsampling
-from modules.loss import FastSpeech2Loss
-from utils.logging import log, LossDict
-from utils.mask import make_non_pad_mask
-from utils.model import Config, get_model, get_param_num, get_vocoder
-from utils.synth import synth_one_sample
-from utils.tools import to_device, ReProcessedItemTorch
+from models.tts import VITS, JETS
+from models.upsampler import (
+    # SiFiGANMultiPeriodAndScaleDiscriminator,
+    SiFiGANMultiPeriodAndResolutionDiscriminator,
+    # SFreGAN2MultiPeriodAndScaleDiscriminator,
+    SFreGAN2MultiPeriodAndResolutionDiscriminator,
+)
+from models.loss import ForwardSumLoss, ResidualLoss, generator_loss, discriminator_loss, feature_loss, kl_loss
+from utils.mel_processing import mel_spectrogram_torch, spec_to_mel_torch
+from utils.checkpoint import load_checkpoint, latest_checkpoint_path, save_checkpoint
+from utils.logging import get_logger, summarize
+from utils.plot import plot_spectrogram_to_numpy, plot_alignment_to_numpy, plot_f0_to_numpy
+from utils.slice import slice_segments
+from utils.tools import clip_grad_value_, to_device
 
-torch.backends.cudnn.benchmark = True
+# torch.backends.cudnn.benchmark = True
+global_step = 0
+outer_bar: Optional[tqdm] = None
+
+
+def main():
+    """Assume Single Node Multi GPUs Training Only"""
+    assert torch.cuda.is_available(), "CPU training is not allowed."
+
+    n_gpus = torch.cuda.device_count()
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "65432"
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "config",
+        type=str,
+        help="YAML file for configuration",
+    )
+    parser.add_argument("-m", "--model", type=str, required=True, help="Model name")
+    parser.add_argument("-s", "--speakers", type=int, required=False, default=10, help="speaker count")
+
+    args = parser.parse_args()
+    model_dir = os.path.join("./logs", args.model)
+
+    with open(args.config, "r") as f:
+        config: Config = yaml.load(f, Loader=yaml.FullLoader)
+
+    if n_gpus > 1:
+        mp.spawn(
+            run,
+            nprocs=n_gpus,
+            args=(
+                n_gpus,
+                config,
+                model_dir,
+                args.speakers
+            ),
+        )
+    else:
+        run(0, n_gpus, config, model_dir, args.speakers)
+
+
+def run(rank: int, n_gpus: int, config: Config, model_dir: str, speakers: int):
+    global global_step
+    global outer_bar
+    if rank == 0:
+        logger = get_logger(model_dir)
+        logger.info(config)
+        writer = SummaryWriter(log_dir=model_dir)
+        writer_eval = SummaryWriter(log_dir=os.path.join(model_dir, "eval"))
+
+    if n_gpus > 1:
+        backend = "gloo" if platform.system() == "Windows" else "nccl"
+        dist.init_process_group(
+            backend, init_method="env://", world_size=n_gpus, rank=rank
+        )
+    torch.manual_seed(config["train"]["seed"])
+    torch.cuda.set_device(rank)
+
+    train_dataset = Dataset("train.txt", config["preprocess"], config["train"])
+    train_sampler = DistributedBucketSampler(
+        train_dataset,
+        config["train"]["optimizer"]["batch_size"],
+        [32, 300, 400, 500, 600, 700, 800, 900, 1000],
+        num_replicas=n_gpus,
+        rank=rank,
+        shuffle=True,
+    )
+    # train_sampler = DistributedSampler(train_dataset)
+
+    train_loader = DataLoader(
+        train_dataset,
+        num_workers=8,
+        shuffle=False,
+        pin_memory=True,
+        collate_fn=train_dataset.collate_fn,
+        batch_sampler=train_sampler,
+    )
+    if rank == 0:
+        eval_dataset = Dataset("val.txt", config["preprocess"], config["train"])
+        eval_loader = DataLoader(
+            eval_dataset,
+            num_workers=8,
+            shuffle=False,
+            batch_size=config["train"]["optimizer"]["batch_size"],
+            pin_memory=True,
+            drop_last=False,
+            collate_fn=eval_dataset.collate_fn,
+        )
+
+    device = torch.device('cuda:{:d}'.format(rank))
+
+    preprocessed_path = config["preprocess"]["path"]["preprocessed_path"]
+    with open(os.path.join(preprocessed_path, "stats.json")) as f:
+        stats_text = f.read()
+    stats_json = json.loads(stats_text)
+    pitch_mean, pitch_std = stats_json["pitch"][2:]
+
+    model_config = config["model"]
+    model_type = model_config["model_type"]
+    
+    if model_type == "vits":
+        Model = VITS
+    elif model_type == "jets":
+        Model = JETS
+    else:
+        raise Exception(f"Unknown model type: {model_type}")
+
+    net_g = Model(
+        model_config,
+        spec_channels=config["preprocess"]["stft"]["filter_length"] // 2 + 1,
+        pitch_mean=pitch_mean,
+        pitch_std=pitch_std,
+        sampling_rate=config["preprocess"]["audio"]["sampling_rate"],
+        hop_length=config["preprocess"]["stft"]["hop_length"],
+        n_speakers=speakers,
+    ).to(device)
+
+    if model_config["upsampler_type"] == "sifigan":
+        net_d = SiFiGANMultiPeriodAndResolutionDiscriminator().to(device)
+    else:
+        net_d = SFreGAN2MultiPeriodAndResolutionDiscriminator().to(device)
+    optim_g = torch.optim.AdamW(
+        net_g.parameters(),
+        config["train"]["optimizer"]["learning_rate"],
+        betas=config["train"]["optimizer"]["betas"],
+        eps=config["train"]["optimizer"]["eps"],
+    )
+    optim_d = torch.optim.AdamW(
+        net_d.parameters(),
+        config["train"]["optimizer"]["learning_rate"],
+        betas=config["train"]["optimizer"]["betas"],
+        eps=config["train"]["optimizer"]["eps"],
+    )
+
+    if n_gpus > 1:
+        net_g = DDP(net_g, device_ids=[rank]).to(device)
+        net_d = DDP(net_d, device_ids=[rank]).to(device)
+    else:
+        net_g = DP(net_g, device_ids=[rank]).to(device)
+        net_d = DP(net_d, device_ids=[rank]).to(device)
+
+    try:
+        _, _, _, epoch_str, _ = load_checkpoint(
+            latest_checkpoint_path(model_dir, "G_*.pth"), net_g, optim_g
+        )
+        _, _, _, epoch_str, step = load_checkpoint(
+            latest_checkpoint_path(model_dir, "D_*.pth"), net_d, optim_d
+        )
+        global_step = step
+    except:
+        epoch_str = 1
+        global_step = 0
+
+    scheduler_g = torch.optim.lr_scheduler.ExponentialLR(
+        optim_g, gamma=config["train"]["optimizer"]["lr_decay"], last_epoch=epoch_str - 2
+    )
+    scheduler_d = torch.optim.lr_scheduler.ExponentialLR(
+        optim_d, gamma=config["train"]["optimizer"]["lr_decay"], last_epoch=epoch_str - 2
+    )
+
+    forward_sum_loss = ForwardSumLoss().to(device)
+    residual_loss = ResidualLoss(
+        sample_rate=config["preprocess"]["audio"]["sampling_rate"],
+        fft_size=config["preprocess"]["stft"]["filter_length"],
+        hop_size=config["preprocess"]["stft"]["hop_length"],
+    ).to(device)
+
+    scaler = GradScaler(enabled=config["train"]["fp16_run"])
+
+    total_epoch = config["train"]["step"]["total_epoch"]
+    train_loader_len = len(train_loader)
+    outer_bar = tqdm(total=total_epoch * train_loader_len, desc="Training", position=0, dynamic_ncols=True)
+    outer_bar.n = global_step
+
+    for epoch in range(epoch_str, total_epoch + 1):
+        if rank == 0:
+            train_and_evaluate(
+                rank,
+                epoch,
+                config,
+                model_dir,
+                (net_g, net_d),
+                (optim_g, optim_d),
+                (scheduler_g, scheduler_d),
+                scaler,
+                (train_loader, eval_loader),
+                logger,
+                (writer, writer_eval),
+                (forward_sum_loss, residual_loss),
+            )
+        else:
+            train_and_evaluate(
+                rank,
+                epoch,
+                config,
+                model_dir,
+                (net_g, net_d),
+                (optim_g, optim_d),
+                (scheduler_g, scheduler_d),
+                scaler,
+                (train_loader, None),
+                None,
+                None,
+                (forward_sum_loss, residual_loss),
+            )
+        scheduler_g.step()
+        scheduler_d.step()
+
+
+def train_and_evaluate(
+    rank: int,
+    epoch: int,
+    config: Config,
+    model_dir: str,
+    nets: Tuple[nn.Module, ...],
+    optims: Tuple[optim.Optimizer, ...],
+    schedulers: Tuple[optim.lr_scheduler.ExponentialLR, ...],
+    scaler: GradScaler,
+    loaders: Tuple[DataLoader, Optional[DataLoader]],
+    logger: Optional[logging.Logger],
+    writers: Optional[Tuple[SummaryWriter]],
+    loss_funcs: List[nn.Module]
+):
+    net_g, net_d = nets
+    optim_g, optim_d = optims
+    scheduler_g, scheduler_d = schedulers
+    train_loader, eval_loader = loaders
+    forward_sum_loss, residual_loss = loss_funcs
+    if writers is not None:
+        writer: SummaryWriter
+        writer_eval: SummaryWriter
+        writer, writer_eval = writers
+    device = torch.device('cuda:{:d}'.format(rank))
+
+    train_loader.batch_sampler.set_epoch(epoch)
+    global global_step
+    global outer_bar
+    if rank == 0:
+        inner_bar = tqdm(total=len(train_loader), desc="Epoch {}".format(epoch), position=1)
+
+    net_g.train()
+    net_d.train()
+    pitch_std = net_g.module.pitch_std
+    pitch_mean = net_g.module.pitch_mean
+    unvoice_pitch = net_g.module.unvoice_pitch
+
+    for batch_idx, batch in enumerate(train_loader):
+        batch = to_device(batch, device)
+        (
+            _,
+            speakers,
+            phonemes,
+            phoneme_lens,
+            _,
+            moras,
+            accents,
+            wavs,
+            specs,
+            spec_lens,
+            _,
+            pitches,
+        ) = batch
+        wavs = wavs.unsqueeze(1)
+
+        with autocast(enabled=config["train"]["fp16_run"]):
+            (
+                y_hat,
+                excs,
+                pitch_slices,
+                durations,
+                pred_durations,
+                avg_pitches,
+                pred_pitches,
+                pred_frame_pitches,
+                unvoice_mask,
+                attn,
+                ids_slice,
+                x_mask,
+                z_mask,
+                loss_bin,
+                loss_vae,
+            ) = net_g(phonemes, phoneme_lens, moras, accents, pitches, specs, spec_lens, speakers)
+
+            mel = spec_to_mel_torch(
+                specs.transpose(1, 2),
+                config["preprocess"]["stft"]["filter_length"],
+                config["preprocess"]["mel"]["n_mel_channels_loss"],
+                config["preprocess"]["audio"]["sampling_rate"],
+                config["preprocess"]["mel"]["mel_fmin"],
+                config["preprocess"]["mel"]["mel_fmax_loss"],
+            )
+            y_mel = slice_segments(
+                mel, ids_slice,
+                config["model"]["upsampler"]["segment_size"] // config["preprocess"]["stft"]["hop_length"]
+            )
+
+        if config["train"]["fp16_run"]:
+            y_hat = y_hat.float()
+        y_hat_mel = mel_spectrogram_torch(
+            y_hat.squeeze(1),
+            config["preprocess"]["stft"]["filter_length"],
+            config["preprocess"]["mel"]["n_mel_channels_loss"],
+            config["preprocess"]["audio"]["sampling_rate"],
+            config["preprocess"]["stft"]["hop_length"],
+            config["preprocess"]["stft"]["win_length"],
+            config["preprocess"]["mel"]["mel_fmin"],
+            config["preprocess"]["mel"]["mel_fmax_loss"],
+        )
+
+        y = slice_segments(
+            wavs, ids_slice * config["preprocess"]["stft"]["hop_length"],
+            config["model"]["upsampler"]["segment_size"]
+        )  # slice
+
+        with autocast(enabled=config["train"]["fp16_run"]):
+            # Discriminator
+            y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
+            with autocast(enabled=False):
+                loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(
+                    y_d_hat_r, y_d_hat_g
+                )
+                loss_disc_all = loss_disc
+        optim_d.zero_grad()
+        scaler.scale(loss_disc_all).backward()
+
+        scaler.unscale_(optim_d)
+        grad_norm_d = clip_grad_value_(net_d.parameters(), None)
+        scaler.step(optim_d)
+
+        with autocast(enabled=config["train"]["fp16_run"]):
+            # Generator
+            # y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
+            _, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
+            with autocast(enabled=False):
+                loss_duration = F.mse_loss(
+                    torch.log(durations.to(dtype=pred_durations.dtype).unsqueeze(1).masked_select(x_mask) + 1.0),
+                    pred_durations.masked_select(x_mask)
+                )
+                loss_pitch = F.mse_loss(
+                    avg_pitches.to(dtype=pred_pitches.dtype).masked_select(x_mask),
+                    pred_pitches.masked_select(x_mask)
+                )
+                with torch.no_grad():
+                    _pitches = pitches.unsqueeze(1).to(dtype=pred_pitches.dtype)
+                    _pitches[unvoice_mask] = unvoice_pitch
+                loss_frame_pitch = F.mse_loss(
+                    _pitches.masked_select(z_mask.bool()),
+                    pred_frame_pitches.masked_select(z_mask.bool())
+                )
+                loss_mel = F.l1_loss(y_mel, y_hat_mel) * config["train"]["loss_balance"]["mel"]
+                fs_loss = forward_sum_loss(attn, phoneme_lens, spec_lens) * config["train"]["loss_balance"]["align"]
+                reg_loss = residual_loss(excs, y, pitch_slices)
+
+                loss_fm = feature_loss(fmap_r, fmap_g) * config["train"]["loss_balance"]["fm"]
+                loss_bin = loss_bin * config["train"]["loss_balance"]["align"]
+                loss_gen, losses_gen = generator_loss(y_d_hat_g)
+                loss_gen = loss_gen * config["train"]["loss_balance"]["gen"]
+                loss_gen_all = loss_gen + loss_mel + loss_bin + fs_loss + reg_loss + loss_fm
+                if config["train"]["step"]["feat_learn_start"] <= global_step:
+                    loss_gen_all = loss_gen_all + loss_duration + loss_pitch + loss_frame_pitch
+                if loss_vae is not None:
+                    _, z_p, m_p, logs_p, _, logs_q = loss_vae
+                    loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * config["train"]["loss_balance"]["kl"]
+                    loss_gen_all = loss_gen_all + loss_kl
+
+        optim_g.zero_grad()
+        scaler.scale(loss_gen_all).backward()
+
+        scaler.unscale_(optim_g)
+        grad_norm_g = clip_grad_value_(net_g.parameters(), None)
+        scaler.step(optim_g)
+        scaler.update()
+
+        if rank == 0:
+            if global_step % config["train"]["step"]["log_step"] == 0:
+                lr = optim_g.param_groups[0]["lr"]
+                losses = {
+                    "loss/g/fm": loss_fm,
+                    "loss/g/mel": loss_mel,
+                    "loss/g/duration": loss_duration,
+                    "loss/g/pitch": loss_pitch,
+                    "loss/g/frame_pitch": loss_frame_pitch,
+                    "loss/g/bin": loss_bin,
+                    "loss/g/fs": fs_loss,
+                    "loss/g/reg": reg_loss,
+                }
+                if loss_vae is not None:
+                    losses["loss/g/kl"] = loss_kl
+                logger.info(
+                    "Train Epoch: {} [{:.0f}%]".format(
+                        epoch, 100.0 * batch_idx / len(train_loader)
+                    )
+                )
+                logger.info(f"Step: {global_step} LR: {lr}")
+                logger.info(", ".join([f"{k.split('/')[-1]}: {v.item()}" for k, v in losses.items()]))
+
+                scalar_dict = {
+                    "loss/g/total": loss_gen_all,
+                    "loss/d/total": loss_disc_all,
+                    "learning_rate": lr,
+                    "grad_norm_d": grad_norm_d,
+                    "grad_norm_g": grad_norm_g,
+                }
+                scalar_dict.update(
+                    losses
+                )
+
+                scalar_dict.update(
+                    {"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)}
+                )
+                scalar_dict.update(
+                    {"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)}
+                )
+                scalar_dict.update(
+                    {"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)}
+                )
+                image_dict = {
+                    "slice/mel_org": plot_spectrogram_to_numpy(
+                        y_mel[0].detach().cpu().numpy()
+                    ),
+                    "slice/mel_gen": plot_spectrogram_to_numpy(
+                        y_hat_mel[0].detach().cpu().numpy()
+                    ),
+                    "all/mel": plot_spectrogram_to_numpy(
+                        mel[0, :, :spec_lens[0]].detach().cpu().numpy()
+                    ),
+                    "all/attn": plot_alignment_to_numpy(
+                        attn[0, :spec_lens[0], :phoneme_lens[0]].detach().cpu().numpy()
+                    ),
+                }
+                summarize(
+                    writer=writer,
+                    global_step=global_step,
+                    images=image_dict,
+                    scalars=scalar_dict,
+                )
+
+            if global_step % config["train"]["step"]["val_step"] == 0:
+                net_g.eval()
+                with torch.no_grad():
+                    x_lengths = phoneme_lens[:1]
+                    x = phonemes[:1, :x_lengths[0]]
+                    spec_lengths = spec_lens[:1]
+                    spec = specs[:1, :spec_lengths[0]]
+                    accent = accents[:1, :x_lengths[0]]
+                    mora = moras[:1,:,:x_lengths]
+                    mora = mora[:,:(mora == 1).nonzero(as_tuple=True)[1][-1]+1,:]
+                    pitch = pitches[:1, :spec_lens[0]]
+                    y = wavs[:1]
+                    speaker = speakers[:1]
+                    (
+                        y_reconst, *_
+                    ) = net_g(x, x_lengths, mora, accent, pitch, spec, spec_lengths, speaker, slice=False)
+                    y_hat, excs, attn, regulated_pitches, pred_regulated_pitches, frame_pitches, mask = \
+                        net_g.module.infer(x, x_lengths, mora, accent, pitch, spec, spec_lengths, sid=speaker)
+                    y_hat_lengths = mask.sum([1, 2]).long() * config["preprocess"]["stft"]["hop_length"]
+
+                    mel = spec_to_mel_torch(
+                        spec.transpose(1, 2),
+                        config["preprocess"]["stft"]["filter_length"],
+                        config["preprocess"]["mel"]["n_mel_channels_loss"],
+                        config["preprocess"]["audio"]["sampling_rate"],
+                        config["preprocess"]["mel"]["mel_fmin"],
+                        config["preprocess"]["mel"]["mel_fmax_loss"],
+                    )
+                    y_hat_mel = mel_spectrogram_torch(
+                        y_hat.squeeze(1).float(),
+                        config["preprocess"]["stft"]["filter_length"],
+                        config["preprocess"]["mel"]["n_mel_channels_loss"],
+                        config["preprocess"]["audio"]["sampling_rate"],
+                        config["preprocess"]["stft"]["hop_length"],
+                        config["preprocess"]["stft"]["win_length"],
+                        config["preprocess"]["mel"]["mel_fmin"],
+                        config["preprocess"]["mel"]["mel_fmax_loss"],
+                    )
+                    image_dict = {
+                        "train/mel": plot_spectrogram_to_numpy(y_hat_mel[0].detach().cpu().numpy())
+                    }
+                    audio_dict = {
+                        "train/audio": y_hat[0, :, : y_hat_lengths[0]],
+                        "train/exc": excs[0, :, : y_hat_lengths[0]]
+                    }
+                    image_dict.update(
+                        {
+                            "train/gt_mel": plot_spectrogram_to_numpy(mel[0].detach().cpu().numpy()),
+                            "train/compare_f0": plot_f0_to_numpy(
+                                pitches[0].detach().cpu().numpy() * pitch_std + pitch_mean,
+                                regulated_pitches[0, 0].detach().cpu().numpy() * pitch_std + pitch_mean,
+                                pred_regulated_pitches[0, 0].detach().cpu().numpy() * pitch_std + pitch_mean,
+                                frame_pitches[0, 0].detach().cpu().numpy()
+                            )
+                        }
+                    )
+                    audio_dict.update({
+                        "train/gt_audio": y[0, :, : y_hat_lengths[0]],
+                        "train/reconst": y_reconst[0, :, : y_hat_lengths[0]],
+                    })
+
+                    summarize(
+                        writer=writer,
+                        global_step=global_step,
+                        images=image_dict,
+                        audios=audio_dict,
+                        audio_sampling_rate=config["preprocess"]["audio"]["sampling_rate"],
+                    )
+                # net_g.train()
+                evaluate(config, device, net_g, eval_loader, writer_eval)
+            if global_step % config["train"]["step"]["save_step"] == 0:
+                save_checkpoint(
+                    net_g,
+                    optim_g,
+                    config["train"]["optimizer"]["learning_rate"],
+                    epoch,
+                    os.path.join(model_dir, "G_{}.pth".format(global_step)),
+                )
+                save_checkpoint(
+                    net_d,
+                    optim_d,
+                    config["train"]["optimizer"]["learning_rate"],
+                    epoch,
+                    os.path.join(model_dir, "D_{}.pth".format(global_step)),
+                )
+            global_step += 1
+            outer_bar.update()
+            inner_bar.update()
+
+    if rank == 0:
+        logger.info("====> Epoch: {}".format(epoch))
 
 
 def evaluate(
-    variance_model: nn.Module,  # PitchAndDurationPredictor
-    embedder_model: nn.Module,  # FeatureEmbedder
-    decoder_model: nn.Module,  # MelSpectrogramDecoder
-    length_regulator: nn.Module,
-    step: int,
-    config: Config,
-    logger: SummaryWriter,
-    vocoder: fregan.Generator = None,
+    config: Config, device: torch.device, generator: nn.Module, eval_loader: DataLoader, writer_eval: SummaryWriter
 ):
-    # Get dataset
-    dataset = Dataset(
-        "val.txt", config["preprocess"], config["train"], sort=False, drop_last=False
-    )
-    batch_size = config["train"]["optimizer"]["batch_size"]
-    device = torch.device('cuda:0')
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=dataset.collate_fn,
-    )
-
-    # Get loss function
-    Loss = FastSpeech2Loss().to(device)
-
-    # Evaluation
-    loss_mean_dict: LossDict = {
-        "total_loss": 0.0,
-        "mel_loss": 0.0,
-        "postnet_mel_loss": 0.0,
-        "duration_loss": 0.0,
-        "pitch_loss": 0.0,
-        "alignment_loss": 0.0
-    }
-    count = 0
-    for batchs in loader:
-        for _batch in batchs:
-            batch: ReProcessedItemTorch = to_device(_batch, device)
+    generator.eval()
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(eval_loader):
+            batch = to_device(batch, device)
             (
                 ids,
                 speakers,
                 phonemes,
                 phoneme_lens,
                 max_phoneme_len,
+                moras,
                 accents,
-                mels,
-                mel_lens,
-                max_mel_len,
+                wavs,
+                specs,
+                spec_lens,
+                max_spec_len,
                 pitches,
             ) = batch
-            with torch.no_grad():
-                pitch_outputs, log_duration_outputs = variance_model(
-                    phonemes=phonemes,
-                    accents=accents,
-                    speakers=speakers,
-                    phoneme_lens=phoneme_lens,
-                    max_phoneme_len=max_phoneme_len,
-                )
-                feature_embedded, avg_pitches, durations, log_p_attn, bin_loss = embedder_model(
-                    phonemes=phonemes,
-                    pitches=pitches,
-                    speakers=speakers,
-                    phoneme_lens=phoneme_lens,
-                    max_phoneme_len=max_phoneme_len,
-                    mels=mels,
-                    mel_lens=mel_lens,
-                )
-                h_masks = make_non_pad_mask(mel_lens).to(feature_embedded.device)
-                d_masks = make_non_pad_mask(phoneme_lens).to(durations.device)
-                length_regulated_tensor = length_regulator(
-                    hs=feature_embedded,
-                    ds=durations,
-                    h_masks=h_masks,
-                    d_masks=d_masks,
-                )
-                outputs, postnet_outputs = decoder_model(
-                    length_regulated_tensor=length_regulated_tensor,
-                    mel_lens=mel_lens,
-                )
+            wavs = wavs.unsqueeze(1)
+            # x, x_lengths = x.cuda(0), x_lengths.cuda(0)
+            # spec, spec_lengths = spec.cuda(0), spec_lengths.cuda(0)
+            # y, y_lengths = y.cuda(0), y_lengths.cuda(0)
 
-                # Cal Loss
-                total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss, align_loss = Loss(
-                    outputs=outputs,
-                    postnet_outputs=postnet_outputs,
-                    log_duration_outputs=log_duration_outputs,
-                    pitch_outputs=pitch_outputs,
-                    mel_targets=mels,
-                    duration_targets=durations,
-                    pitch_targets=avg_pitches,
-                    log_p_attn=log_p_attn,
-                    input_lens=phoneme_lens,
-                    output_lens=mel_lens,
-                )
-                bin_loss *= 2.0
-                align_loss += bin_loss
+            # remove else
+            x_lengths = phoneme_lens[:1]
+            x = phonemes[:1,:x_lengths]
+            spec_lengths = spec_lens[:1]
+            spec = specs[:1,:spec_lengths]
+            pitch = pitches[:1,:spec_lengths]
+            accent = accents[:1,:x_lengths]
+            mora = moras[:1,:,:x_lengths]
+            mora = mora[:,:(mora == 1).nonzero(as_tuple=True)[1][-1]+1,:]
+            y = wavs[:1]
+            y_lengths = spec_lens[:1] * config["preprocess"]["stft"]["filter_length"]
+            speaker = speakers[:1]
+            break
+        y_hat, excs, attn, regulated_pitches, pred_regulated_pitches, frame_pitches, mask = \
+            generator.module.infer(x, x_lengths, mora, accent, pitch, spec, spec_lengths, sid=speaker)
 
-                # total loss
-                total_loss += bin_loss
+        y_hat_lengths = mask.sum([1, 2]).long() * config["preprocess"]["stft"]["hop_length"]
 
-                loss_dict: LossDict = {
-                    "total_loss": total_loss,
-                    "mel_loss": mel_loss,
-                    "postnet_mel_loss": postnet_mel_loss,
-                    "duration_loss": duration_loss,
-                    "pitch_loss": pitch_loss,
-                    "alignment_loss": align_loss
-                }
+        mel = spec_to_mel_torch(
+            spec.transpose(1, 2),
+            config["preprocess"]["stft"]["filter_length"],
+            config["preprocess"]["mel"]["n_mel_channels_loss"],
+            config["preprocess"]["audio"]["sampling_rate"],
+            config["preprocess"]["mel"]["mel_fmin"],
+            config["preprocess"]["mel"]["mel_fmax_loss"],
+        )
+        y_hat_mel = mel_spectrogram_torch(
+            y_hat.squeeze(1).float(),
+            config["preprocess"]["stft"]["filter_length"],
+            config["preprocess"]["mel"]["n_mel_channels_loss"],
+            config["preprocess"]["audio"]["sampling_rate"],
+            config["preprocess"]["stft"]["hop_length"],
+            config["preprocess"]["stft"]["win_length"],
+            config["preprocess"]["mel"]["mel_fmin"],
+            config["preprocess"]["mel"]["mel_fmax_loss"],
+        )
+    pitch_std = generator.module.pitch_std
+    pitch_mean = generator.module.pitch_mean
+    image_dict = {
+        "gen/mel": plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy()),
+        "gen/compare_f0": plot_f0_to_numpy(
+            pitches[0].detach().cpu().numpy() * pitch_std + pitch_mean,
+            regulated_pitches[0, 0].detach().cpu().numpy() * pitch_std + pitch_mean,
+            pred_regulated_pitches[0, 0].detach().cpu().numpy() * pitch_std + pitch_mean,
+            frame_pitches[0, 0].detach().cpu().numpy()
+        )
+    }
+    audio_dict = {
+        "gen/audio": y_hat[0, :, : y_hat_lengths[0]],
+        "gen/exc": excs[0, :, : y_hat_lengths[0]]
+    }
+    if global_step == 0:
+        image_dict.update(
+            {"gt/mel": plot_spectrogram_to_numpy(mel[0].cpu().numpy())}
+        )
+        audio_dict.update({"gt/audio": y[0, :, : y_lengths[0]]})
 
-                for key in loss_dict.keys():
-                    loss_value = loss_dict[key]
-                    if loss_value is not None:
-                        loss_mean_dict[key] += loss_dict[key].item() * len(batch[0])
-
-            if count < 5:
-                fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
-                    ids=ids,
-                    duration_targets=durations,
-                    pitch_targets=avg_pitches,
-                    mel_targets=mels,
-                    mel_predictions=postnet_outputs,
-                    phoneme_lens=phoneme_lens,
-                    mel_lens=mel_lens,
-                    vocoder=vocoder,
-                    config=config,
-                    synthesis_target=(step == int(config["train"]["step"]["val_step"]))
-                )
-
-                log(
-                    logger,
-                    fig=fig,
-                    tag="Validation/{}".format(tag),
-                    step=step,
-                )
-                sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
-                log(
-                    logger,
-                    audio=wav_reconstruction,
-                    sampling_rate=sampling_rate,
-                    tag="Validation/{}_gt".format(tag),
-                )
-                log(
-                    logger,
-                    audio=wav_prediction,
-                    sampling_rate=sampling_rate,
-                    tag="Validation/{}_synthesized".format(tag),
-                    step=step,
-                )
-            count += 1
-
-    for key in loss_mean_dict.keys():
-        loss_value = loss_mean_dict[key]
-        if loss_value is not None:
-            loss_mean_dict[key] = loss_mean_dict[key] / len(dataset)
-
-    log(logger, step, loss_dict=loss_mean_dict)
-
-    message1 = "Validation Step {}, ".format(step)
-    message2 = (
-        "Total Loss: {total_loss:.4f}, "
-        "Mel Loss: {mel_loss:.4f}, "
-        "Mel PostNet Loss: {postnet_mel_loss:.4f}, "
-        "Duration Loss: {duration_loss:.4f}, "
-        "Pitch Loss: {pitch_loss:.4f}, "
-        "Alignment Loss: {alignment_loss:.4f}"
-    ).format(
-        **loss_mean_dict
+    summarize(
+        writer=writer_eval,
+        global_step=global_step,
+        images=image_dict,
+        audios=audio_dict,
+        audio_sampling_rate=config["preprocess"]["audio"]["sampling_rate"],
     )
-
-    return message1 + message2
-
-
-def main(rank: int, restore_step: int, speaker_num, config: Config, num_gpus: int):
-    if rank == 0:
-        print("Prepare training ...")
-    if num_gpus > 1:
-        init_process_group(backend="nccl", init_method="env://",
-                           world_size=num_gpus, rank=rank)
-    device = torch.device('cuda:{:d}'.format(rank))
-
-    # Get dataset
-    dataset = Dataset(
-        "train.txt", config["preprocess"], config["train"], sort=True, drop_last=True
-    )
-    batch_size = config["train"]["optimizer"]["batch_size"]
-    if num_gpus > 1:
-        group_size = 1
-    else:
-        group_size = 4  # Set this larger than 1 to enable sorting in Dataset
-    assert batch_size * group_size < len(dataset)
-
-    sampler = DistributedSampler(dataset) if num_gpus > 1 else None
-
-    cpu_count = os.cpu_count()
-    if cpu_count > 8:
-        cpu_count = 8
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size * group_size,
-        shuffle=num_gpus == 1,
-        num_workers=cpu_count,
-        sampler=sampler,
-        pin_memory=True,
-        drop_last=True,
-        collate_fn=dataset.collate_fn,
-    )
-
-    # Prepare model
-    variance_model, embedder_model, decoder_model, optimizer, epoch = get_model(restore_step, config, device, speaker_num, train=True)
-    length_regulator = GaussianUpsampling().to(device)
-    if num_gpus > 1:
-        variance_model = DistributedDataParallel(variance_model, device_ids=[rank]).to(device)
-        embedder_model = DistributedDataParallel(embedder_model, device_ids=[rank]).to(device)
-        decoder_model = DistributedDataParallel(decoder_model, device_ids=[rank]).to(device)
-
-    num_param = get_param_num(variance_model) + get_param_num(embedder_model) + get_param_num(decoder_model)
-    Loss = FastSpeech2Loss().to(device)
-    if rank == 0:
-        print("Number of FastSpeech2 Parameters:", num_param)
-
-    # Load vocoder
-    vocoder = get_vocoder(device, config["model"]["vocoder_type"])
-
-    # Init logger
-    for p in config["train"]["path"].values():
-        os.makedirs(p, exist_ok=True)
-    train_log_path = os.path.join(config["train"]["path"]["log_path"], "train")
-    val_log_path = os.path.join(config["train"]["path"]["log_path"], "val")
-    os.makedirs(train_log_path, exist_ok=True)
-    os.makedirs(val_log_path, exist_ok=True)
-    train_logger = SummaryWriter(train_log_path)
-    val_logger = SummaryWriter(val_log_path)
-
-    # Training
-    step = restore_step + 1
-    epoch = max(1, epoch)
-    total_step = config["train"]["step"]["total_step"]
-    log_step = config["train"]["step"]["log_step"]
-    save_step = config["train"]["step"]["save_step"]
-    synth_step = config["train"]["step"]["synth_step"]
-    val_step = config["train"]["step"]["val_step"]
-    variance_learn_start = config["train"]["step"]["variance_learn_start"]
-
-    if rank == 0:
-        outer_bar = tqdm(total=total_step, desc="Training", position=0)
-        outer_bar.n = restore_step
-        outer_bar.update()
-
-    while True:
-        if rank == 0:
-            inner_bar = tqdm(total=len(loader), desc="Epoch {}".format(epoch), position=1)
-
-        if num_gpus > 1:
-            sampler.set_epoch(epoch)
-
-        for batchs in loader:
-            for _batch in batchs:
-                batch: ReProcessedItemTorch = to_device(_batch, device)
-                (
-                    ids,
-                    speakers,
-                    phonemes,
-                    phoneme_lens,
-                    max_phoneme_len,
-                    accents,
-                    mels,
-                    mel_lens,
-                    max_mel_len,
-                    pitches,
-                ) = batch
-
-                # Forward
-                pitch_outputs, log_duration_outputs = variance_model(
-                    phonemes=phonemes,
-                    accents=accents,
-                    speakers=speakers,
-                    phoneme_lens=phoneme_lens,
-                    max_phoneme_len=max_phoneme_len,
-                )
-                feature_embedded, avg_pitches, durations, log_p_attn, bin_loss = embedder_model(
-                    phonemes=phonemes,
-                    pitches=pitches,
-                    speakers=speakers,
-                    phoneme_lens=phoneme_lens,
-                    max_phoneme_len=max_phoneme_len,
-                    mels=mels,
-                    mel_lens=mel_lens,
-                )
-                h_masks = make_non_pad_mask(mel_lens).to(feature_embedded.device)
-                d_masks = make_non_pad_mask(phoneme_lens).to(durations.device)
-                length_regulated_tensor = length_regulator(
-                    hs=feature_embedded,
-                    ds=durations,
-                    h_masks=h_masks,
-                    d_masks=d_masks,
-                )
-                outputs, postnet_outputs = decoder_model(
-                    length_regulated_tensor=length_regulated_tensor,
-                    mel_lens=mel_lens,
-                )
-
-                # Cal Loss
-                total_loss, mel_loss, postnet_mel_loss, duration_loss, pitch_loss, align_loss = Loss(
-                    outputs=outputs,
-                    postnet_outputs=postnet_outputs,
-                    log_duration_outputs=log_duration_outputs,
-                    pitch_outputs=pitch_outputs,
-                    mel_targets=mels,
-                    duration_targets=durations,
-                    pitch_targets=avg_pitches,
-                    log_p_attn=log_p_attn,
-                    input_lens=phoneme_lens,
-                    output_lens=mel_lens,
-                    variance_learn=variance_learn_start < step
-                )
-                # align loss
-                bin_loss *= 2.0  # loss scaling
-                align_loss += bin_loss
-
-                total_loss = total_loss + bin_loss
-
-                loss_dict: LossDict = {
-                    "total_loss": total_loss,
-                    "mel_loss": mel_loss,
-                    "postnet_mel_loss": postnet_mel_loss,
-                    "duration_loss": duration_loss,
-                    "pitch_loss": pitch_loss,
-                    "alignment_loss": align_loss
-                }
-
-                # Backward
-                total_loss.backward()
-
-                # Update weights
-                optimizer.step_and_update_lr()
-                optimizer.zero_grad()
-
-                if rank == 0:
-                    if step % log_step == 0:
-                        message1 = "Step {}/{}, ".format(step, total_step)
-                        message2 = (
-                            "Total Loss: {total_loss:.4f}, "
-                            "Mel Loss: {mel_loss:.4f}, "
-                            "Mel PostNet Loss: {postnet_mel_loss:.4f}, "
-                            "Duration Loss: {duration_loss:.4f}, "
-                            "Pitch Loss: {pitch_loss:.4f}, "
-                            "Alignment Loss: {alignment_loss:.4f}"
-                        ).format(
-                            **loss_dict
-                        )
-
-                        with open(os.path.join(train_log_path, "log.txt"), "a") as f:
-                            f.write(message1 + message2 + "\n")
-
-                        outer_bar.write(message1 + message2)
-
-                        log(train_logger, step, loss_dict=loss_dict)
-
-                    if step % synth_step == 0:
-                        fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
-                            ids=ids,
-                            duration_targets=durations,
-                            pitch_targets=avg_pitches,
-                            mel_targets=mels,
-                            mel_predictions=postnet_outputs,
-                            phoneme_lens=phoneme_lens,
-                            mel_lens=mel_lens,
-                            vocoder=vocoder,
-                            config=config
-                        )
-                        log(
-                            train_logger,
-                            fig=fig,
-                            tag="Training/step_{}_{}".format(step, tag),
-                        )
-                        sampling_rate = config["preprocess"]["audio"]["sampling_rate"]
-                        log(
-                            train_logger,
-                            audio=wav_reconstruction,
-                            sampling_rate=sampling_rate,
-                            tag="Training/step_{}_{}_reconstructed".format(step, tag),
-                        )
-                        log(
-                            train_logger,
-                            audio=wav_prediction,
-                            sampling_rate=sampling_rate,
-                            tag="Training/step_{}_{}_synthesized".format(step, tag),
-                        )
-
-                    if step % val_step == 0:
-                        variance_model.eval()
-                        embedder_model.eval()
-                        decoder_model.eval()
-                        message = evaluate(
-                            variance_model, embedder_model, decoder_model, length_regulator, step, config, val_logger, vocoder
-                        )
-                        with open(os.path.join(val_log_path, "log.txt"), "a") as f:
-                            f.write(message + "\n")
-                        outer_bar.write(message)
-
-                        variance_model.train()
-                        embedder_model.train()
-                        decoder_model.train()
-
-                    if step % save_step == 0:
-                        torch.save(
-                            {
-                                "variance_model": (variance_model.module if num_gpus > 1 else variance_model).state_dict(),
-                                "embedder_model": (embedder_model.module if num_gpus > 1 else embedder_model).state_dict(),
-                                "decoder_model": (decoder_model.module if num_gpus > 1 else decoder_model).state_dict(),
-                                "optimizer": {
-                                    "variance": optimizer._variance_optimizer.state_dict(),
-                                    "embedder": optimizer._embedder_optimizer.state_dict(),
-                                    "decoder": optimizer._decoder_optimizer.state_dict(),
-                                },
-                                "epoch": epoch - 1,
-                            },
-                            os.path.join(
-                                config["train"]["path"]["ckpt_path"],
-                                "{:08d}.pth.tar".format(step),
-                            ),
-                        )
-
-                if step == total_step:
-                    quit()
-                step += 1
-
-                if rank == 0:
-                    outer_bar.update()
-
-            if rank == 0:
-                inner_bar.update()
-        epoch += 1
+    generator.train()
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("config", type=str, help="path to config yaml")
-    parser.add_argument("--restore_step", type=int, default=0)
-    parser.add_argument("--speaker_num", type=int, default=10)
-    args = parser.parse_args()
-
-    config: Config = yaml.load(
-        open(args.config, "r"), Loader=yaml.FullLoader
-    )
-
-    num_gpus = 0
-    if torch.cuda.is_available():
-        num_gpus = torch.cuda.device_count()
-        batch_size = config["train"]["optimizer"]["batch_size"]
-        config["train"]["optimizer"]["batch_size"] = int(batch_size / num_gpus)
-        print('Batch size per GPU :', config["train"]["optimizer"]["batch_size"])
-    else:
-        raise Exception("cuda is not available")
-
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '54321'
-
-    if num_gpus > 1:
-        mp.spawn(main, nprocs=num_gpus, args=(args.restore_step, args.speaker_num, config, num_gpus,))
-    else:
-        main(0, args.restore_step, args.speaker_num, config, num_gpus)
+if __name__ == "__main__":
+    main()

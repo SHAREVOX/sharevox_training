@@ -63,3 +63,8 @@ def pad_2D(inputs: Union[np.ndarray, List[np.ndarray]], maxlen: Optional[int] = 
 
     return output
 
+def pad_3D(inputs, B, T, L):
+    inputs_padded = np.zeros((B, T, L), dtype=np.float32)
+    for i, input_ in enumerate(inputs):
+        inputs_padded[i, :np.shape(input_)[0], :np.shape(input_)[1]] = input_
+    return inputs_padded

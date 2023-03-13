@@ -1,42 +1,56 @@
-from typing import Optional, Sequence, Union, TypedDict
+import logging
+from logging import handlers
+import os
+import sys
 
-import numpy as np
-from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
-from matplotlib import pyplot as plt
-
-LossValue = Union[Tensor, np.ndarray, float]
+from tqdm import tqdm
 
 
-class LossDict(TypedDict):
-    total_loss: LossValue
-    mel_loss: LossValue
-    postnet_mel_loss: LossValue
-    duration_loss: LossValue
-    pitch_loss: LossValue
-    alignment_loss: LossValue
+class LoggingHandler(logging.Handler):
+    def __init__(self, level=logging.NOTSET):
+        super().__init__(level)
 
-def log(
-    logger: SummaryWriter,
-    step: Optional[int] = None,
-    loss_dict: Optional[LossDict] = None,
-    fig: Optional[plt.Figure] = None,
-    audio: Optional[np.ndarray] = None,
-    sampling_rate: int = 48000,
-    tag: str = ""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg, file=sys.stderr)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+
+def get_logger(model_dir: str, filename: str = "train.log"):
+    logger = logging.getLogger(os.path.basename(model_dir))
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    formatter = logging.Formatter("%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s")
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+    fh = logging.FileHandler(os.path.join(model_dir, filename))
+    fh.setFormatter(formatter)
+    sh = LoggingHandler()
+    sh.setFormatter(formatter)
+    logger.addHandler(sh)
+    logger.addHandler(fh)
+    return logger
+
+
+def summarize(
+    writer: SummaryWriter,
+    global_step: int,
+    scalars: dict = {},
+    histograms: dict = {},
+    images: dict = {},
+    audios: dict = {},
+    audio_sampling_rate: int = 22050,
 ):
-    if loss_dict is not None:
-        for key, value in loss_dict.items():
-            if value is not None:
-                logger.add_scalar(f"Loss/{key}", value, step)
-
-    if fig is not None:
-        logger.add_figure(tag, fig, step)
-
-    if audio is not None:
-        logger.add_audio(
-            tag,
-            audio / max(abs(audio)),
-            step,
-            sample_rate=sampling_rate,
-        )
+    for k, v in scalars.items():
+        writer.add_scalar(k, v, global_step)
+    for k, v in histograms.items():
+        writer.add_histogram(k, v, global_step)
+    for k, v in images.items():
+        writer.add_image(k, v, global_step, dataformats="HWC")
+    for k, v in audios.items():
+        writer.add_audio(k, v, global_step, audio_sampling_rate)
