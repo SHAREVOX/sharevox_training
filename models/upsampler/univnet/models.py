@@ -44,8 +44,9 @@ class DiscriminatorR(nn.Module):
         x = F.pad(x, (int((self.n_fft - self.hop_length) / 2), int((self.n_fft - self.hop_length) / 2)), mode='reflect')
         x = x.squeeze(1)
         x = torch.stft(
-            x, n_fft=self.n_fft, hop_length=self.hop_length, win_length=self.win_length, center=False
-        )  # [B, F, TT, 2]
+            x, n_fft=self.n_fft, hop_length=self.hop_length, win_length=self.win_length, center=False, return_complex=True
+        )  # [B, F, TT]
+        x = torch.view_as_real(x)  # [B, F, TT, 2]
         mag = torch.norm(x, p=2, dim=-1)  # [B, F, TT]
 
         return mag
