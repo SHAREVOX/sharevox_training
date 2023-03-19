@@ -18,7 +18,7 @@ class TrainConfigOptimizer(TypedDict):
     betas: Tuple[float, float]
     learning_rate: float
     lr_decay: float
-    eps: float
+    weight_decay: float
 
 
 class TrainConfigStep(TypedDict):

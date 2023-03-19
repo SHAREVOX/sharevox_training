@@ -20,6 +20,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP, DataParallel as DP
 from torch.cuda.amp import autocast, GradScaler
 
 from tqdm import tqdm
+from lion_pytorch import Lion as LionOptimizer
 
 from models.tts import VITS, JETS
 from models.upsampler import (
@@ -159,17 +160,17 @@ def run(rank: int, n_gpus: int, config: Config, model_dir: str, speakers: int):
         net_d = SiFiGANMultiPeriodAndResolutionDiscriminator().to(device)
     else:
         net_d = SFreGAN2MultiPeriodAndResolutionDiscriminator().to(device)
-    optim_g = torch.optim.AdamW(
+    optim_g = LionOptimizer(
         net_g.parameters(),
         config["train"]["optimizer"]["learning_rate"],
         betas=config["train"]["optimizer"]["betas"],
-        eps=config["train"]["optimizer"]["eps"],
+        weight_decay=config["train"]["optimizer"]["weight_decay"],
     )
-    optim_d = torch.optim.AdamW(
+    optim_d = LionOptimizer(
         net_d.parameters(),
         config["train"]["optimizer"]["learning_rate"],
         betas=config["train"]["optimizer"]["betas"],
-        eps=config["train"]["optimizer"]["eps"],
+        weight_decay=config["train"]["optimizer"]["weight_decay"],
     )
 
     if n_gpus > 1:
