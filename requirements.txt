@@ -16,4 +16,3 @@ tensorboard
 matplotlib
 PyWavelets
 git+https://github.com/y-chan/pytorch_wavelets#e17a086
-git+https://github.com/lucidrains/lion-pytorch#ee26e32
