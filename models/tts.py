@@ -218,7 +218,7 @@ class JETS(nn.Module):
             config["pitch_embedding"]["hidden"],
             self.global_hidden
         )
-        self.f0_upsampler = nn.Upsample(scale_factor=2, mode="linear")
+        # self.f0_upsampler = nn.Upsample(scale_factor=2, mode="linear")
 
         if n_speakers > 1:
             self.emb_g = nn.Embedding(n_speakers, self.global_hidden)
@@ -249,6 +249,24 @@ class JETS(nn.Module):
 
         return pred_frame_pitches
 
+    def make_unvoice_mask(self, phonemes: Tensor, durations: LongTensor) -> Tensor:
+        phonemes = phonemes.unsqueeze(-1)
+        B = phonemes.size(0)
+        unvoice_mask = (
+            (phonemes == _symbol_to_id["pau"]) |
+            (phonemes == _symbol_to_id["cl"]) |
+            (phonemes == _symbol_to_id["I"]) |
+            (phonemes == _symbol_to_id["U"]) |
+            torch.cat(
+                ((phonemes == _symbol_to_id["I"])[:, 1:], torch.zeros(B, 1, 1).to(phonemes.device, dtype=torch.bool)), dim=1
+            ) |
+            torch.cat(
+                ((phonemes == _symbol_to_id["U"])[:, 1:], torch.zeros(B, 1, 1).to(phonemes.device, dtype=torch.bool)), dim=1
+            )
+        )
+        regulated_unvoice_mask = self.length_regulator(unvoice_mask, durations).transpose(1, 2)
+        return regulated_unvoice_mask
+
     def pitch_smoothly(self, pitches: Tensor, unvoice_mask: Optional[Tensor] = None) -> Tensor:
         pitches = pitches * self.pitch_std + self.pitch_mean
         pitches[pitches < 10] = 1
@@ -256,12 +274,13 @@ class JETS(nn.Module):
         if unvoice_mask is not None:
             pitches[unvoice_mask] = 1
 
-        downsampled_pitches = torch.cat(
-            (pitches[:, :, ::2], torch.ones(pitches.shape[0], 1, 2).to(pitches.device)), dim=2
-        )
-        upsampled_pitches = self.f0_upsampler(downsampled_pitches)[:, :, :pitches.shape[2]]
-        upsampled_pitches[pitches == 1] = 1
-        return upsampled_pitches
+        # downsampled_pitches = torch.cat(
+        #     (pitches[:, :, ::2], torch.ones(pitches.shape[0], 1, 2).to(pitches.device)), dim=2
+        # )
+        # upsampled_pitches = self.f0_upsampler(downsampled_pitches)[:, :, :pitches.shape[2]]
+        # upsampled_pitches[pitches == 1] = 1
+        # return upsampled_pitches
+        return pitches
 
     def forward_upsampler(self, z: Tensor, pitches: Tensor, g: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
         dfs = []
@@ -314,10 +333,9 @@ class JETS(nn.Module):
             avg_pitches = (moras.transpose(1, 2).to(mora_avg_pitches.dtype) * mora_avg_pitches).sum(dim=-1).unsqueeze(1)
 
         x = self.length_regulator(x.transpose(1, 2), durations)
-        regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), durations).transpose(1, 2)
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
-        unvoice_mask = (regulated_phonemes == _symbol_to_id["pau"]) | (regulated_phonemes == _symbol_to_id["cl"])
+        unvoice_mask = self.make_unvoice_mask(phonemes, durations)
         regulated_pitches[unvoice_mask] = self.unvoice_pitch
         y_mask = make_non_pad_mask(spec_lens).unsqueeze(1).to(x.device)
 
@@ -389,15 +407,13 @@ class JETS(nn.Module):
         pred_mora_durations = (moras * pred_durations).sum(dim=-1)
 
         x = self.length_regulator(x.transpose(1, 2), pred_durations)
-        regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), durations).transpose(1, 2)
-        pred_regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), pred_durations).transpose(1, 2)
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
-        unvoice_mask = (regulated_phonemes == _symbol_to_id["pau"]) | (regulated_phonemes == _symbol_to_id["cl"])
+        unvoice_mask = self.make_unvoice_mask(phonemes, durations)
         regulated_pitches[unvoice_mask] = self.unvoice_pitch
 
         pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
-        pred_unvoice_mask = (pred_regulated_phonemes == _symbol_to_id["pau"]) | (pred_regulated_phonemes == _symbol_to_id["cl"])
+        pred_unvoice_mask = self.make_unvoice_mask(phonemes, pred_durations)
         pred_regulated_pitches[pred_unvoice_mask] = self.unvoice_pitch
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
@@ -476,10 +492,9 @@ class VITS(JETS):
             avg_pitches = (moras.transpose(1, 2).to(mora_avg_pitches.dtype) * mora_avg_pitches).sum(dim=-1).unsqueeze(1)
 
         x = self.length_regulator(x.transpose(1, 2), durations)
-        regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), durations).transpose(1, 2)
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
-        unvoice_mask = (regulated_phonemes == _symbol_to_id["pau"]) | (regulated_phonemes == _symbol_to_id["cl"])
+        unvoice_mask = self.make_unvoice_mask(phonemes, durations)
         regulated_pitches[unvoice_mask] = self.unvoice_pitch
 
         z, m_q, logs_q, y_mask = self.enc_q(specs.transpose(1, 2), spec_lens, g=g)
@@ -554,15 +569,13 @@ class VITS(JETS):
         pred_mora_durations = (moras * pred_durations).sum(dim=-1)
 
         x = self.length_regulator(x.transpose(1, 2), pred_durations)
-        regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), durations).transpose(1, 2)
-        pred_regulated_phonemes = self.length_regulator(phonemes.unsqueeze(-1), pred_durations).transpose(1, 2)
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
-        unvoice_mask = (regulated_phonemes == _symbol_to_id["pau"]) | (regulated_phonemes == _symbol_to_id["cl"])
+        unvoice_mask = self.make_unvoice_mask(phonemes, durations)
         regulated_pitches[unvoice_mask] = self.unvoice_pitch
 
         pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
-        pred_unvoice_mask = (pred_regulated_phonemes == _symbol_to_id["pau"]) | (pred_regulated_phonemes == _symbol_to_id["cl"])
+        pred_unvoice_mask = self.make_unvoice_mask(phonemes, pred_durations)
         pred_regulated_pitches[pred_unvoice_mask] = self.unvoice_pitch
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
