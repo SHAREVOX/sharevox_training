@@ -108,7 +108,7 @@ model:
 train:
   optimizer:
     batch_size: 16
-    betas: [ 0.9, 0.99 ]
+    betas: [ 0.8, 0.999 ]
     learning_rate: 0.0002
     lr_decay: 0.999
     weight_decay: 0.001
