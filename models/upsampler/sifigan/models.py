@@ -179,6 +179,7 @@ class Generator(nn.Module):
 
         # sine embedding layers
         self.sn_embedding = weight_norm(Conv1d(1, upsample_initial_channel // (2 ** len(h["upsample_kernel_sizes"])), 7, padding=3))
+        self.vuv_embedding = weight_norm(Conv1d(1, upsample_initial_channel // (2 ** len(h["upsample_kernel_sizes"])), 7, padding=3))
 
         self.sn_ups = nn.ModuleList()
         self.fn_ups = nn.ModuleList()
@@ -229,7 +230,7 @@ class Generator(nn.Module):
         self.conv_post.apply(init_weights)
         self.sn_conv_post.apply(init_weights)
 
-    def forward(self, x, f0, d, g=None):
+    def forward(self, x, f0, vuv, d, g=None):
         """Calculate forward propagation.
         Args:
             x (Tensor): Input tensor (B, in_channels, T).
@@ -246,6 +247,9 @@ class Generator(nn.Module):
 
         # source-network forward
         f0 = self.sn_embedding(f0)
+        vuv = self.vuv_embedding(vuv)
+        f0 = f0 + vuv
+
         embs = [f0]
         for i in range(self.num_upsamples - 1):
             f0 = self.sn_downs[i](f0)

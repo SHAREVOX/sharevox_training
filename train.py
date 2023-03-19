@@ -283,7 +283,6 @@ def train_and_evaluate(
     net_d.train()
     pitch_std = net_g.module.pitch_std
     pitch_mean = net_g.module.pitch_mean
-    unvoice_pitch = net_g.module.unvoice_pitch
 
     for batch_idx, batch in enumerate(train_loader):
         batch = to_device(batch, device)
@@ -381,11 +380,8 @@ def train_and_evaluate(
                     avg_pitches.to(dtype=pred_pitches.dtype).masked_select(x_mask),
                     pred_pitches.masked_select(x_mask)
                 )
-                with torch.no_grad():
-                    _pitches = pitches.unsqueeze(1).to(dtype=pred_pitches.dtype)
-                    _pitches[unvoice_mask] = unvoice_pitch
                 loss_frame_pitch = F.mse_loss(
-                    _pitches.masked_select(z_mask.bool()),
+                    pitches.unsqueeze(1).to(dtype=pred_pitches.dtype).masked_select(z_mask.bool()),
                     pred_frame_pitches.masked_select(z_mask.bool())
                 )
                 loss_mel = F.l1_loss(y_mel, y_hat_mel) * config["train"]["loss_balance"]["mel"]
