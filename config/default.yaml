@@ -111,7 +111,7 @@ train:
     betas: [ 0.8, 0.999 ]
     learning_rate: 0.0002
     lr_decay: 0.999
-    eps: 0.000000001
+    weight_decay: 0.001
   step:
     total_epoch: 3000
     log_step: 100
