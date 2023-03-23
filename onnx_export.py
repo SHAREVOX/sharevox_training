@@ -107,20 +107,21 @@ class Decoder(torch.nn.Module):
 
         pitch = pitch.unsqueeze(1)
         unvoice_mask = pitch == 0
+        pitch[unvoice_mask] = pitch.mean()
         pitch = (torch.exp(pitch) - self.pitch_mean) / self.pitch_std
         pred_frame_pitches = self.generator.forward_pitch_upsampler(pitch, g=g)
-        smoothly_pitches = self.generator.pitch_smoothly(pred_frame_pitches, unvoice_mask)
+        f0 = self.generator.pitch_to_f0(pred_frame_pitches)
 
         if hasattr(self.generator, "flow"):
             _, m_p, logs_p, _ = self.generator.frame_prior_network(x)
             z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p)
             y_mask = torch.ones_like(pitch)
             z = self.generator.flow(z_p, y_mask, g=g, inverse=True)
-            wav, _ = self.generator.forward_upsampler(z, smoothly_pitches)
+            wav, _ = self.generator.forward_upsampler(z, f0, unvoice_mask)
         else:
             z, _ = self.generator.frame_prior_network(x, None)
             z = z.transpose(1, 2)
-            wav, _ = self.generator.forward_upsampler(z, smoothly_pitches, g=g)
+            wav, _ = self.generator.forward_upsampler(z, f0, unvoice_mask, g=g)
 
         return wav.squeeze(1)
 

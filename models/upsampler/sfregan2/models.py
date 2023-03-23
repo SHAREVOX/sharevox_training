@@ -31,6 +31,9 @@ class Generator(nn.Module):
         self.sn_embedding = weight_norm(
             Conv1d(4 if multi_idwt else 2, upsample_initial_channel // (2 ** len(h["upsample_kernel_sizes"])), 7, padding=3)
         )
+        self.vuv_embedding = weight_norm(
+            Conv1d(4 if multi_idwt else 2, upsample_initial_channel // (2 ** len(h["upsample_kernel_sizes"])), 7, padding=3)
+        )
 
         self.sn_ups = nn.ModuleList()
         self.fn_ups = nn.ModuleList()
@@ -131,7 +134,7 @@ class Generator(nn.Module):
 
         return self.idwt([x_low, [x_high]])
 
-    def forward(self, x, f0, d, g=None):
+    def forward(self, x, f0, vuv, d, g=None):
         x = self.conv_pre(x)
         if g is not None:
             x = x + self.cond(g)
@@ -143,10 +146,21 @@ class Generator(nn.Module):
             f0AA, f0AC = self.dwt(f0A)
             f0CA, f0CC = self.dwt(f0C[0])
             f0 = torch.cat([f0AA, f0AC[0], f0CA, f0CC[0]], dim=1)
+
+            vuvA, vuvC = self.dwt(vuv)
+            vuvAA, vuvAC = self.dwt(vuvA)
+            vuvCA, vuvCC = self.dwt(vuvC[0])
+            vuv = torch.cat([vuvAA, vuvAC[0], vuvCA, vuvCC[0]], dim=1)
         else:
             f0A, f0C = self.dwt(f0)
             f0 = torch.cat([f0A, f0C[0]], dim=1)
+
+            vuvA, vuvC = self.dwt(vuv)
+            vuv = torch.cat([vuvA, vuvC[0]], dim=1)
+
         f0 = self.sn_embedding(f0)
+        vuv = self.vuv_embedding(vuv)
+        f0 = f0 + vuv
 
         embs = [f0]
         for i in range(self.num_upsamples - 1):

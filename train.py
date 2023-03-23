@@ -20,7 +20,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP, DataParallel as DP
 from torch.cuda.amp import autocast, GradScaler
 
 from tqdm import tqdm
-from lion_pytorch import Lion as LionOptimizer
 
 from models.tts import VITS, JETS
 from models.upsampler import (
@@ -160,17 +159,17 @@ def run(rank: int, n_gpus: int, config: Config, model_dir: str, speakers: int):
         net_d = SiFiGANMultiPeriodAndResolutionDiscriminator().to(device)
     else:
         net_d = SFreGAN2MultiPeriodAndResolutionDiscriminator().to(device)
-    optim_g = LionOptimizer(
+    optim_g = torch.optim.AdamW(
         net_g.parameters(),
         config["train"]["optimizer"]["learning_rate"],
         betas=config["train"]["optimizer"]["betas"],
-        weight_decay=config["train"]["optimizer"]["weight_decay"],
+        eps=config["train"]["optimizer"]["eps"],
     )
-    optim_d = LionOptimizer(
+    optim_d = torch.optim.AdamW(
         net_d.parameters(),
         config["train"]["optimizer"]["learning_rate"],
         betas=config["train"]["optimizer"]["betas"],
-        weight_decay=config["train"]["optimizer"]["weight_decay"],
+        eps=config["train"]["optimizer"]["eps"],
     )
 
     if n_gpus > 1:
@@ -283,7 +282,6 @@ def train_and_evaluate(
     net_d.train()
     pitch_std = net_g.module.pitch_std
     pitch_mean = net_g.module.pitch_mean
-    unvoice_pitch = net_g.module.unvoice_pitch
 
     for batch_idx, batch in enumerate(train_loader):
         batch = to_device(batch, device)
@@ -381,11 +379,8 @@ def train_and_evaluate(
                     avg_pitches.to(dtype=pred_pitches.dtype).masked_select(x_mask),
                     pred_pitches.masked_select(x_mask)
                 )
-                with torch.no_grad():
-                    _pitches = pitches.unsqueeze(1).to(dtype=pred_pitches.dtype)
-                    _pitches[unvoice_mask] = unvoice_pitch
                 loss_frame_pitch = F.mse_loss(
-                    _pitches.masked_select(z_mask.bool()),
+                    pitches.unsqueeze(1).to(dtype=pred_pitches.dtype).masked_select(z_mask.bool()),
                     pred_frame_pitches.masked_select(z_mask.bool())
                 )
                 loss_mel = F.l1_loss(y_mel, y_hat_mel) * config["train"]["loss_balance"]["mel"]
