@@ -329,7 +329,7 @@ class JETS(nn.Module):
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
         unvoice_mask = self.make_unvoice_mask(phonemes, durations)
-        regulated_pitches[unvoice_mask] = self.unvoice_pitch
+        # regulated_pitches[unvoice_mask] = self.unvoice_pitch
         y_mask = make_non_pad_mask(spec_lens).unsqueeze(1).to(x.device)
 
         pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, y_mask, g)
@@ -407,10 +407,12 @@ class JETS(nn.Module):
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
         unvoice_mask = self.make_unvoice_mask(phonemes, durations)
         regulated_pitches[unvoice_mask] = self.unvoice_pitch
+        regulated_pitches[unvoice_mask] = regulated_pitches.mean()
 
         pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
         pred_unvoice_mask = self.make_unvoice_mask(phonemes, pred_durations)
         pred_regulated_pitches[pred_unvoice_mask] = self.unvoice_pitch
+        pred_regulated_pitches[pred_unvoice_mask] = pred_regulated_pitches.mean()
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
@@ -491,7 +493,7 @@ class VITS(JETS):
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
         unvoice_mask = self.make_unvoice_mask(phonemes, durations)
-        regulated_pitches[unvoice_mask] = self.unvoice_pitch
+        # regulated_pitches[unvoice_mask] = self.unvoice_pitch
 
         z, m_q, logs_q, y_mask = self.enc_q(specs.transpose(1, 2), spec_lens, g=g)
         z_p = self.flow(z, y_mask, g=g)
@@ -572,10 +574,12 @@ class VITS(JETS):
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
         unvoice_mask = self.make_unvoice_mask(phonemes, durations)
         regulated_pitches[unvoice_mask] = self.unvoice_pitch
+        regulated_pitches[unvoice_mask] = regulated_pitches.mean()
 
         pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
         pred_unvoice_mask = self.make_unvoice_mask(phonemes, pred_durations)
         pred_regulated_pitches[pred_unvoice_mask] = self.unvoice_pitch
+        pred_regulated_pitches[pred_unvoice_mask] = pred_regulated_pitches.mean()
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
