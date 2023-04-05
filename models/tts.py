@@ -407,12 +407,12 @@ class JETS(nn.Module):
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
         unvoice_mask = self.make_unvoice_mask(phonemes, durations)
         regulated_pitches[unvoice_mask] = self.unvoice_pitch
-        regulated_pitches[unvoice_mask] = regulated_pitches.mean()
+        regulated_pitches[unvoice_mask] = regulated_pitches.mean() - 1
 
         pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
         pred_unvoice_mask = self.make_unvoice_mask(phonemes, pred_durations)
         pred_regulated_pitches[pred_unvoice_mask] = self.unvoice_pitch
-        pred_regulated_pitches[pred_unvoice_mask] = pred_regulated_pitches.mean()
+        pred_regulated_pitches[pred_unvoice_mask] = pred_regulated_pitches.mean() - 1
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
@@ -574,12 +574,12 @@ class VITS(JETS):
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
         unvoice_mask = self.make_unvoice_mask(phonemes, durations)
         regulated_pitches[unvoice_mask] = self.unvoice_pitch
-        regulated_pitches[unvoice_mask] = regulated_pitches.mean()
+        regulated_pitches[unvoice_mask] = regulated_pitches.mean() - 1
 
         pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
         pred_unvoice_mask = self.make_unvoice_mask(phonemes, pred_durations)
         pred_regulated_pitches[pred_unvoice_mask] = self.unvoice_pitch
-        pred_regulated_pitches[pred_unvoice_mask] = pred_regulated_pitches.mean()
+        pred_regulated_pitches[pred_unvoice_mask] = pred_regulated_pitches.mean() - 1
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
