@@ -117,11 +117,11 @@ class Decoder(torch.nn.Module):
             z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p)
             y_mask = torch.ones_like(pitch)
             z = self.generator.flow(z_p, y_mask, g=g, inverse=True)
-            wav, _ = self.generator.forward_upsampler(z, f0, unvoice_mask)
+            wav, _ = self.generator.forward_upsampler(z, f0)
         else:
             z, _ = self.generator.frame_prior_network(x, None)
             z = z.transpose(1, 2)
-            wav, _ = self.generator.forward_upsampler(z, f0, unvoice_mask, g=g)
+            wav, _ = self.generator.forward_upsampler(z, f0, g=g)
 
         return wav.squeeze(1)
 
