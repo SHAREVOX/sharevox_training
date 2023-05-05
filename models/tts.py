@@ -212,6 +212,11 @@ class JETS(nn.Module):
             ),
             torch.nn.Dropout(config["pitch_embedding"]["dropout"]),
         )
+        self.vuv_embedding = nn.Embedding(
+            num_embeddings=2,  # 0 or 1
+            embedding_dim=config["pitch_embedding"]["hidden"],
+            padding_idx=padding_idx
+        )
 
         self.pitch_upsampler = VariancePredictor(
             config["pitch_upsampler"],
@@ -239,13 +244,16 @@ class JETS(nn.Module):
 
         return pred_pitches, pred_durations
 
-    def forward_pitch_upsampler(self, pitches: Tensor, y_mask: Optional[Tensor] = None, g: Optional[Tensor] = None) -> Tensor:
+    def forward_pitch_upsampler(self, pitches: Tensor, vuvs: Tensor, y_mask: Optional[Tensor] = None, g: Optional[Tensor] = None) -> Tensor:
         pitch_embed = self.pitch_embedding(pitches).transpose(1, 2)
+        vuv_embed = self.vuv_embedding(vuvs.long()).squeeze(1)
+        hs = pitch_embed + vuv_embed
+
         if y_mask is not None:
             y_mask = y_mask.bool()
-            pred_frame_pitches = self.pitch_upsampler(pitch_embed, ~y_mask, g=g)
+            pred_frame_pitches = self.pitch_upsampler(hs, ~y_mask, g=g)
         else:
-            pred_frame_pitches = self.pitch_upsampler(pitch_embed, g=g)
+            pred_frame_pitches = self.pitch_upsampler(hs, g=g)
 
         return pred_frame_pitches
 
@@ -325,10 +333,13 @@ class JETS(nn.Module):
 
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
         unvoice_mask = self.make_unvoice_mask(phonemes, durations)
-        # regulated_pitches[unvoice_mask] = self.unvoice_pitch
+        regulated_pitches[unvoice_mask] = self.unvoice_pitch
+        for i in range(unvoice_mask.shape[0]):
+            regulated_pitches[i, unvoice_mask[i]] = regulated_pitches[i].mean() - 1
+
         y_mask = make_non_pad_mask(spec_lens).unsqueeze(1).to(x.device)
 
-        pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, y_mask, g)
+        pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, unvoice_mask, y_mask, g)
         z, _ = self.frame_prior_network(x, y_mask)
         f0 = self.pitch_to_f0(pitches)
 
@@ -399,16 +410,20 @@ class JETS(nn.Module):
         regulated_pitches = self.length_regulator(mora_avg_pitches.transpose(1, 2), mora_durations).transpose(1, 2)
         unvoice_mask = self.make_unvoice_mask(phonemes, durations)
         regulated_pitches[unvoice_mask] = self.unvoice_pitch
-        regulated_pitches[unvoice_mask] = regulated_pitches.mean() - 1
+        for i in range(unvoice_mask.shape[0]):
+            mean = regulated_pitches[i].mean() - 1
+            regulated_pitches[i, unvoice_mask[i]] = mean
 
         pred_regulated_pitches = self.length_regulator(pred_mora_pitches.transpose(1, 2), pred_mora_durations).transpose(1, 2)
         pred_unvoice_mask = self.make_unvoice_mask(phonemes, pred_durations)
         pred_regulated_pitches[pred_unvoice_mask] = self.unvoice_pitch
-        pred_regulated_pitches[pred_unvoice_mask] = pred_regulated_pitches.mean() - 1
+        for i in range(pred_unvoice_mask.shape[0]):
+            mean = pred_regulated_pitches[i].mean() - 1
+            pred_regulated_pitches[i, pred_unvoice_mask[i]] = mean
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
-        pred_frame_pitches = self.forward_pitch_upsampler(pred_regulated_pitches, y_mask, g)
+        pred_frame_pitches = self.forward_pitch_upsampler(pred_regulated_pitches, pred_unvoice_mask, y_mask, g)
         z, _ = self.frame_prior_network(x, y_mask)
         f0 = self.pitch_to_f0(pred_frame_pitches)
 
@@ -490,7 +505,7 @@ class VITS(JETS):
         z, m_q, logs_q, y_mask = self.enc_q(specs.transpose(1, 2), spec_lens, g=g)
         z_p = self.flow(z, y_mask, g=g)
 
-        pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, y_mask, g)
+        pred_frame_pitches = self.forward_pitch_upsampler(regulated_pitches, unvoice_mask, y_mask, g)
         x, m_p, logs_p, _ = self.frame_prior_network(x, y_mask.bool())
         f0 = self.pitch_to_f0(pitches)
 
@@ -571,7 +586,7 @@ class VITS(JETS):
 
         y_mask = make_non_pad_mask(torch.tensor([pred_regulated_pitches.shape[2]])).unsqueeze(1).to(specs.device)
 
-        pred_frame_pitches = self.forward_pitch_upsampler(pred_regulated_pitches, y_mask, g)
+        pred_frame_pitches = self.forward_pitch_upsampler(pred_regulated_pitches, pred_unvoice_mask, y_mask, g)
         _, m_p, logs_p, _ = self.frame_prior_network(x, y_mask.bool())
         f0 = self.pitch_to_f0(pred_frame_pitches)
 

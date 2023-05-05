@@ -107,8 +107,8 @@ class Decoder(torch.nn.Module):
 
         pitch = pitch.unsqueeze(1)
         unvoice_mask = pitch == 0
-        pitch[unvoice_mask] = pitch.mean() - 1
         pitch = (torch.exp(pitch) - self.pitch_mean) / self.pitch_std
+        pitch[unvoice_mask] = pitch.mean() - 1
         pred_frame_pitches = self.generator.forward_pitch_upsampler(pitch, g=g)
         f0 = self.generator.pitch_to_f0(pred_frame_pitches)
 
