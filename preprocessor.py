@@ -143,7 +143,10 @@ class Preprocessor:
             wavs = list(filter(lambda p: ".wav" in p, os.listdir(os.path.join(self.in_dir, speaker))))
             for wav_name in tqdm(wavs, desc="File", position=1):
                 basename = wav_name.split(".")[0]
-                phonemes = list(filter(lambda d: basename in d, out))[0].split("|")[2].split(" ")
+                filter_out = list(filter(lambda d: basename in d, out))
+                if len(filter_out) == 0:
+                    continue
+                phonemes = filter_out[0].split("|")[2].split(" ")
                 pitch, n = self.process_utterance(speaker, basename, phonemes)
 
                 if len(pitch) > 0:

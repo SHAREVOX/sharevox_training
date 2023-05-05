@@ -126,7 +126,7 @@ class SignalGenerator:
         # logger.info(f"Use {signal_types} for generator input signals.")
 
     @torch.no_grad()
-    def __call__(self, f0, vuv=None):
+    def __call__(self, f0):
         signals = []
         for typ in self.signal_types:
             if "noise" == typ:
@@ -136,8 +136,7 @@ class SignalGenerator:
             if "sines" == typ:
                 signals.append(self.sinusoids(f0))
             if "uv" == typ:
-                assert vuv is not None
-                signals.append(self.vuv_binary(vuv))
+                signals.append(self.vuv_binary(f0))
 
         input_batch = signals[0]
         for signal in signals[1:]:
@@ -202,15 +201,15 @@ class SignalGenerator:
         return sines
 
     @torch.no_grad()
-    def vuv_binary(self, vuv):
+    def vuv_binary(self, f0):
         """Calculate V/UV binary sequences.
         Args:
             f0 (Tensor): F0 tensor (B, 1, T // hop_size).
         Returns:
             Tensor: V/UV binary sequences (B, 1, T).
         """
-        _, _, T = vuv.size()
-        uv = interpolate(vuv.to(torch.float), T * self.hop_size)
+        _, _, T = f0.size()
+        uv = interpolate((f0 > 0) * torch.ones_like(f0), T * self.hop_size)
 
         return uv
 

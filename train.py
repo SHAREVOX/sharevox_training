@@ -474,6 +474,7 @@ def train_and_evaluate(
             if global_step % config["train"]["step"]["val_step"] == 0:
                 net_g.eval()
                 with torch.no_grad():
+                    hop_length = config["preprocess"]["stft"]["hop_length"]
                     x_lengths = phoneme_lens[:1]
                     x = phonemes[:1, :x_lengths[0]]
                     spec_lengths = spec_lens[:1]
@@ -489,7 +490,8 @@ def train_and_evaluate(
                     ) = net_g(x, x_lengths, mora, accent, pitch, spec, spec_lengths, speaker, slice=False)
                     y_hat, excs, attn, regulated_pitches, pred_regulated_pitches, frame_pitches, mask = \
                         net_g.module.infer(x, x_lengths, mora, accent, pitch, spec, spec_lengths, sid=speaker)
-                    y_hat_lengths = mask.sum([1, 2]).long() * config["preprocess"]["stft"]["hop_length"]
+                    y_length = spec_lengths * hop_length
+                    y_hat_lengths = mask.sum([1, 2]).long() * hop_length
 
                     mel = spec_to_mel_torch(
                         spec.transpose(1, 2),
@@ -528,8 +530,8 @@ def train_and_evaluate(
                         }
                     )
                     audio_dict.update({
-                        "train/gt_audio": y[0, :, : y_hat_lengths[0]],
-                        "train/reconst": y_reconst[0, :, : y_hat_lengths[0]],
+                        "train/gt_audio": y[0, :, : y_length[0]],
+                        "train/reconst": y_reconst[0, :, : y_length[0]],
                     })
 
                     summarize(
@@ -591,6 +593,7 @@ def evaluate(
             # y, y_lengths = y.cuda(0), y_lengths.cuda(0)
 
             # remove else
+            hop_length = config["preprocess"]["stft"]["hop_length"]
             x_lengths = phoneme_lens[:1]
             x = phonemes[:1,:x_lengths]
             spec_lengths = spec_lens[:1]
@@ -600,13 +603,13 @@ def evaluate(
             mora = moras[:1,:,:x_lengths]
             mora = mora[:,:(mora == 1).nonzero(as_tuple=True)[1][-1]+1,:]
             y = wavs[:1]
-            y_lengths = spec_lens[:1] * config["preprocess"]["stft"]["filter_length"]
+            y_lengths = spec_lens[:1] * hop_length
             speaker = speakers[:1]
             break
         y_hat, excs, attn, regulated_pitches, pred_regulated_pitches, frame_pitches, mask = \
             generator.module.infer(x, x_lengths, mora, accent, pitch, spec, spec_lengths, sid=speaker)
 
-        y_hat_lengths = mask.sum([1, 2]).long() * config["preprocess"]["stft"]["hop_length"]
+        y_hat_lengths = mask.sum([1, 2]).long() * hop_length
 
         mel = spec_to_mel_torch(
             spec.transpose(1, 2),
