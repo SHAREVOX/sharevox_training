@@ -57,6 +57,8 @@ def main():
     )
     parser.add_argument("-m", "--model", type=str, required=True, help="Model name")
     parser.add_argument("-s", "--speakers", type=int, required=False, default=10, help="speaker count")
+    parser.add.argument("-g", "--g_checkpoint_path", type=str, required=False, default=None, help="generator checkpoint path")
+    parser.add.argument("-d", "--d_checkpoint_path", type=str, required=False, default=None, help="discriminator checkpoint path")
 
     args = parser.parse_args()
     model_dir = os.path.join("./logs", args.model)
@@ -72,14 +74,32 @@ def main():
                 n_gpus,
                 config,
                 model_dir,
-                args.speakers
+                args.speakers,
+                args.g_checkpoint_path,
+                args.d_checkpoint_path
             ),
         )
     else:
-        run(0, n_gpus, config, model_dir, args.speakers)
+        run(
+            0,
+            n_gpus,
+            config,
+            model_dir,
+            args.speakers,
+            args.g_checkpoint_path,
+            args.d_checkpoint_path
+        )
 
 
-def run(rank: int, n_gpus: int, config: Config, model_dir: str, speakers: int):
+def run(
+    rank: int,
+    n_gpus: int,
+    config: Config,
+    model_dir: str,
+    speakers: int,
+    g_checkpoint_path: Optional[str] = None,
+    d_checkpoint_path: Optional[str] = None
+):
     global global_step
     global outer_bar
     if rank == 0:
@@ -190,6 +210,10 @@ def run(rank: int, n_gpus: int, config: Config, model_dir: str, speakers: int):
     except:
         epoch_str = 1
         global_step = 0
+        if g_checkpoint_path is not None:
+            _, _, _, epoch_str, _ = load_checkpoint(g_checkpoint_path, net_g, optim_g)
+        if d_checkpoint_path is not None:
+            _, _, _, epoch_str, _ = load_checkpoint(d_checkpoint_path, net_d, optim_d)
 
     scheduler_g = torch.optim.lr_scheduler.ExponentialLR(
         optim_g, gamma=config["train"]["optimizer"]["lr_decay"], last_epoch=epoch_str - 2
