@@ -57,8 +57,8 @@ def main():
     )
     parser.add_argument("-m", "--model", type=str, required=True, help="Model name")
     parser.add_argument("-s", "--speakers", type=int, required=False, default=10, help="speaker count")
-    parser.add.argument("-g", "--g_checkpoint_path", type=str, required=False, default=None, help="generator checkpoint path")
-    parser.add.argument("-d", "--d_checkpoint_path", type=str, required=False, default=None, help="discriminator checkpoint path")
+    parser.add_argument("-g", "--g_checkpoint_path", type=str, required=False, default=None, help="generator checkpoint path")
+    parser.add_argument("-d", "--d_checkpoint_path", type=str, required=False, default=None, help="discriminator checkpoint path")
     parser.add_argument("-l", "--log_dir", type=str, required=False, default="./logs", help="log dir path")
 
     args = parser.parse_args()
