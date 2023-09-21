@@ -120,7 +120,7 @@ class Preprocessor:
 
         # Compute pitch, duration, and mel-spectrogram
         speakers = {}
-        dirs = list(filter(lambda x: os.path.isdir(os.path.join(self.in_dir, x)), os.listdir(self.in_dir)))
+        dirs = sorted(list(filter(lambda x: os.path.isdir(os.path.join(self.in_dir, x)), os.listdir(self.in_dir))))
         for i, speaker in enumerate(self.tqdm(dirs, desc="Dir", position=0)):
             speakers[speaker] = i
 
