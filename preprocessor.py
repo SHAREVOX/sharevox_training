@@ -61,7 +61,7 @@ def load_wav(full_path: str, sr: int, filter_length: int, hop_length: int, trim_
     data, sampling_rate = librosa.load(full_path, sr=None)
     # resampling by outside of librosa and showing warning
     if sampling_rate != sr:
-        tqdm.write(f"sampling rate is different(required: {sampling_rate}, actually: {sr}, file: {full_path}), auto converted by script.")
+        tqdm.write(f"sampling rate is different(required: {sr}, actually: {sampling_rate}, file: {full_path}), auto converted by script.")
         data = resampy.resample(data, sampling_rate, sr, filter="kaiser_best")
 
     _, index = librosa.effects.trim(data, top_db=trim_top_db, frame_length=filter_length, hop_length=hop_length)
