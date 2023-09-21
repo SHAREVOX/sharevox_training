@@ -3,7 +3,7 @@ import os
 import json
 import argparse
 import platform
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import yaml
 
@@ -19,7 +19,8 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP, DataParallel as DP
 from torch.cuda.amp import autocast, GradScaler
 
-from tqdm import tqdm
+from tqdm import tqdm as tqdm_console
+from tqdm.notebook import tqdm as tqdm_notebook
 
 from models.tts import VITS, JETS
 from models.upsampler import (
@@ -38,7 +39,7 @@ from utils.tools import clip_grad_value_, to_device
 
 # torch.backends.cudnn.benchmark = True
 global_step = 0
-outer_bar: Optional[tqdm] = None
+outer_bar: Optional[Union[tqdm_console, tqdm_notebook]] = None
 
 
 def main():
@@ -60,9 +61,13 @@ def main():
     parser.add_argument("-g", "--g_checkpoint_path", type=str, required=False, default=None, help="generator checkpoint path")
     parser.add_argument("-d", "--d_checkpoint_path", type=str, required=False, default=None, help="discriminator checkpoint path")
     parser.add_argument("-l", "--log_dir", type=str, required=False, default="./logs", help="log dir path")
+    parser.add_argument("-t", "--tqdm_mode", type=str, required=False, default="console", help="tqdm mode (console or notebook)")
 
     args = parser.parse_args()
     model_dir = os.path.join(args.log_dir, args.model)
+
+    assert args.tqdm_mode in ["console", "notebook"], "tqdm mode must be console or notebook"
+    tqdm = tqdm_notebook if args.tqdm_mode == "notebook" else tqdm_console
 
     with open(args.config, "r") as f:
         config: Config = yaml.load(f, Loader=yaml.FullLoader)
@@ -77,7 +82,8 @@ def main():
                 model_dir,
                 args.speakers,
                 args.g_checkpoint_path,
-                args.d_checkpoint_path
+                args.d_checkpoint_path,
+                tqdm
             ),
         )
     else:
@@ -88,7 +94,8 @@ def main():
             model_dir,
             args.speakers,
             args.g_checkpoint_path,
-            args.d_checkpoint_path
+            args.d_checkpoint_path,
+            tqdm
         )
 
 
@@ -99,7 +106,8 @@ def run(
     model_dir: str,
     speakers: int,
     g_checkpoint_path: Optional[str] = None,
-    d_checkpoint_path: Optional[str] = None
+    d_checkpoint_path: Optional[str] = None,
+    tqdm = tqdm_console,
 ):
     global global_step
     global outer_bar
@@ -252,6 +260,7 @@ def run(
                 logger,
                 (writer, writer_eval),
                 (forward_sum_loss, residual_loss),
+                tqdm
             )
         else:
             train_and_evaluate(
@@ -267,6 +276,7 @@ def run(
                 None,
                 None,
                 (forward_sum_loss, residual_loss),
+                tqdm
             )
         scheduler_g.step()
         scheduler_d.step()
@@ -284,7 +294,8 @@ def train_and_evaluate(
     loaders: Tuple[DataLoader, Optional[DataLoader]],
     logger: Optional[logging.Logger],
     writers: Optional[Tuple[SummaryWriter]],
-    loss_funcs: List[nn.Module]
+    loss_funcs: List[nn.Module],
+    tqdm: Union[tqdm_console, tqdm_notebook],
 ):
     net_g, net_d = nets
     optim_g, optim_d = optims

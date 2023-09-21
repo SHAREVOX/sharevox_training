@@ -16,7 +16,8 @@ from sklearn.preprocessing import StandardScaler
 from librosa.util import normalize
 import numpy as np
 import pyworld as pw
-from tqdm import tqdm
+from tqdm import tqdm as tqdm_console
+from tqdm.notebook import tqdm as tqdm_notebook
 
 from utils.mel_processing import spectrogram_torch as spectrogram
 
@@ -61,7 +62,7 @@ def load_wav(full_path: str, sr: int, filter_length: int, hop_length: int, trim_
     data, sampling_rate = librosa.load(full_path, sr=None)
     # resampling by outside of librosa and showing warning
     if sampling_rate != sr:
-        tqdm.write(f"sampling rate is different(required: {sr}, actually: {sampling_rate}, file: {full_path}), auto converted by script.")
+        tqdm_console.write(f"sampling rate is different(required: {sr}, actually: {sampling_rate}, file: {full_path}), auto converted by script.")
         data = resampy.resample(data, sampling_rate, sr, filter="kaiser_best")
 
     _, index = librosa.effects.trim(data, top_db=trim_top_db, frame_length=filter_length, hop_length=hop_length)
@@ -94,7 +95,7 @@ def get_wav(config: PreProcessConfig, speaker: str, basename: str) -> Tuple[np.n
 
 
 class Preprocessor:
-    def __init__(self, config: PreProcessConfig):
+    def __init__(self, config: PreProcessConfig, tqdm_mode = "console"):
         self.config = config
         self.in_dir = config["path"]["data_path"]
         self.text_dir = config["path"]["text_data_path"]
@@ -103,6 +104,8 @@ class Preprocessor:
         self.sampling_rate = config["audio"]["sampling_rate"]
         self.max_wav_value = config["audio"]["max_wav_value"]
         self.hop_length = config["stft"]["hop_length"]
+        assert tqdm_mode in ["console", "notebook"], "tqdm mode must be console or notebook"
+        self.tqdm = tqdm_notebook if tqdm_mode == "notebook" else tqdm_console
 
     def build_from_path(self) -> List[str]:
         os.makedirs((os.path.join(self.out_dir, "wav")), exist_ok=True)
@@ -118,7 +121,7 @@ class Preprocessor:
         # Compute pitch, duration, and mel-spectrogram
         speakers = {}
         dirs = list(filter(lambda x: os.path.isdir(os.path.join(self.in_dir, x)), os.listdir(self.in_dir)))
-        for i, speaker in enumerate(tqdm(dirs, desc="Dir", position=0)):
+        for i, speaker in enumerate(self.tqdm(dirs, desc="Dir", position=0)):
             speakers[speaker] = i
 
             # phoneme
@@ -141,7 +144,7 @@ class Preprocessor:
                 accents = ["# " + text.split(",")[1] + " #" for text in accents]
 
             wavs = list(filter(lambda p: ".wav" in p, os.listdir(os.path.join(self.in_dir, speaker))))
-            for wav_name in tqdm(wavs, desc="File", position=1):
+            for wav_name in self.tqdm(wavs, desc="File", position=1):
                 basename = wav_name.split(".")[0]
                 filter_out = list(filter(lambda d: basename in d, out))
                 if len(filter_out) == 0:
@@ -269,7 +272,7 @@ class Preprocessor:
     def normalize(self, in_dir: str, mean: float, std: float) -> Tuple[np.generic, np.generic]:
         max_value = np.finfo(np.float64).min
         min_value = np.finfo(np.float64).max
-        for filename in tqdm(os.listdir(in_dir), desc="Normalizing"):
+        for filename in self.tqdm(os.listdir(in_dir), desc="Normalizing"):
             filename = os.path.join(in_dir, filename)
             values = (np.load(filename) - mean) / std
             np.save(filename, values)
@@ -283,8 +286,9 @@ class Preprocessor:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=str, help="path to preprocess.yaml")
+    parser.add_argument("-t", "--tqdm_mode", type=str, help="tqdm mode (console or notebook)", default="console")
     args = parser.parse_args()
 
     config = yaml.load(open(args.config, "r"), Loader=yaml.FullLoader)
-    preprocessor = Preprocessor(config["preprocess"])
+    preprocessor = Preprocessor(config["preprocess"], tqdm_mode=args.tqdm_mode)
     preprocessor.build_from_path()
